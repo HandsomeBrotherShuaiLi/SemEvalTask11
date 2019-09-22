@@ -36,6 +36,7 @@ class Dataloader(object):
         sentence=[]
         zero_num=0
         one_num=0
+        label_lens=[]
         for article in os.listdir(self.train_articles):
             path=os.path.join(self.train_articles,article)
             f=open(path,'r',encoding='utf-8').read()
@@ -45,7 +46,9 @@ class Dataloader(object):
             for i in labels:
                 temp=i.split('\t')
                 one_num+=int(temp[-1].strip('\n'))-int(temp[1])
+                label_lens.append(int(temp[-1].strip('\n'))-int(temp[1]))
         print('0的个数是：{}, 1的个数是{}'.format(zero_num-one_num,one_num))
+        print('最短的标记长度是{},最长的标记长度是{}'.format(min(label_lens),max(label_lens)))
 
         for dev_artcicle in os.listdir(self.dev_articles):
             f=open(os.path.join(self.dev_articles,dev_artcicle),'r',
