@@ -2,6 +2,7 @@ import os
 from keras.preprocessing.text import Tokenizer
 import numpy as np
 import keras.backend as K
+import gensim
 class Dataloader(object):
     """
     字符级别的处理，单词级别的处理很难，暂时不做
@@ -11,13 +12,15 @@ class Dataloader(object):
                  SI_dir='data/train-labels-task1-span-identification',
                  TC_dir='data/train-labels-task2-technique-classification',
                  split_ratio=0.2,
-                 batch_size=3):
+                 batch_size=3,
+                 embedding_dim=100):
         self.train_articles = train_articles
         self.dev_articles=dev_articles
         self.SI_dir=SI_dir
         self.TC_dir=TC_dir
+        self.embedding_dim=embedding_dim
         self.batch_size=batch_size
-        self.SI_token=self.preprocess_for_SI()
+        self.SI_token,self.embedding_matrix=self.preprocess_for_SI()
         all_index=np.array(range(len(os.listdir(self.train_articles))))
         val_num=int(all_index.shape[0]*split_ratio)
         self.val_index=np.random.choice(all_index,val_num,replace=False)
@@ -31,17 +34,19 @@ class Dataloader(object):
         self.char_num=len(self.SI_token.word_index)
         # word_index -> word:index
 
-    def preprocess_for_SI(self):
-        token=Tokenizer(num_words=40000,char_level=True)
+    def preprocess_for_SI(self,wordembedding=False):
+        token=Tokenizer(num_words=40000,char_level=True,lower=False)
         sentence=[]
         zero_num=0
         one_num=0
         label_lens=[]
+        s=[]
         for article in os.listdir(self.train_articles):
             path=os.path.join(self.train_articles,article)
             f=open(path,'r',encoding='utf-8').read()
             sentence+=f
             zero_num+=len(f)
+            s.append(list(f))
             labels=open(os.path.join(self.SI_dir,article.replace('.txt','.task1-SI.labels')),'r',encoding='utf-8').readlines()
             for i in labels:
                 temp=i.split('\t')
@@ -54,8 +59,16 @@ class Dataloader(object):
             f=open(os.path.join(self.dev_articles,dev_artcicle),'r',
                    encoding='utf-8').read()
             sentence+=f
+            s.append(list(f))
         token.fit_on_texts(sentence)
-        return token
+        if wordembedding:
+            model=gensim.models.Word2Vec(s,size=self.embedding_dim,min_count=1)
+            model.save('charembedding')
+        model = gensim.models.Word2Vec.load('charembedding')
+        embedding_matrix=np.zeros(shape=(len(model.wv.vocab.items())+1,model.vector_size))
+        for char,i in token.word_index.items():
+            embedding_matrix[i]=model.wv[char]
+        return token,embedding_matrix
 
     def sort_length(self):
         train_len_dict={i:len(open(os.path.join(self.train_articles,os.listdir(self.train_articles)[i]),
@@ -64,6 +77,8 @@ class Dataloader(object):
                                       'r', encoding='utf-8').read()) for i in self.val_index}
         self.train_len_dict=sorted(train_len_dict.items(),key=lambda item:item[1])
         self.val_len_dict=sorted(val_len_dict.items(),key=lambda item:item[1])
+        print(self.train_len_dict)
+        print(self.val_len_dict)
     def generator(self,is_train=True):
         """
         batch size=1 因为训练样本数量不多，没必要padding了
@@ -71,8 +86,8 @@ class Dataloader(object):
         :return:
         """
         dicts=self.train_len_dict if is_train else self.val_len_dict
-        index=[i[0] for i in dicts]
-        lens=[i[1] for i in dicts]
+        index=[i[0] for i in dicts][::-1]
+        lens=[i[1] for i in dicts][::-1]
         start=0
         while True:
             start = (start + 1) % len(index)
@@ -109,3 +124,7 @@ class Dataloader(object):
             yield inputs, labels
             start = (start + self.batch_size) % len(index) if flag==False else 0
 
+# model=gensim.models.Word2Vec.load('charembedding')
+# for i in model.wv.vocab.items():
+#     print(i)
+# d=Dataloader()
