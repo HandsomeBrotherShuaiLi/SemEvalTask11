@@ -9,6 +9,13 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="nus_1">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/diskA/wenqiang/lishuai/SemEvalTask11" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="nus_2">
         <serverdata>
           <mappings>

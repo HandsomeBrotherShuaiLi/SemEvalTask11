@@ -4,12 +4,14 @@ import numpy as np
 import keras.backend as K
 import gensim
 from keras import Input,Model
-from keras.layers import LSTM,Bidirectional,Embedding,Dropout,Dense
-# from CRFlayer import CRF
+from keras.layers import LSTM,Bidirectional,Embedding,Dropout,Dense,TimeDistributed
 # from CRFlayer_2 import CRF
 from keras.optimizers import Adam
 import os
 from keras.callbacks import ReduceLROnPlateau,TensorBoard,ModelCheckpoint,EarlyStopping
+import warnings
+warnings.filterwarnings('ignore')
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 class Dataloader(object):
     """
     字符级别的处理，单词级别的处理很难，暂时不做
@@ -19,7 +21,7 @@ class Dataloader(object):
                  SI_dir='data/train-labels-task1-span-identification',
                  TC_dir='data/train-labels-task2-technique-classification',
                  split_ratio=0.2,
-                 batch_size=3,
+                 batch_size=1,
                  embedding_dim=100,
                  use_word2vec=True):
         self.train_articles = train_articles
@@ -61,6 +63,7 @@ class Dataloader(object):
                 temp=i.split('\t')
                 one_num+=int(temp[-1].strip('\n'))-int(temp[1])
                 label_lens.append(int(temp[-1].strip('\n'))-int(temp[1]))
+        self.zero_rate=(zero_num-one_num)/zero_num
         print('0的个数是：{}, 1的个数是{}'.format(zero_num-one_num,one_num))
         print('最短的标记长度是{},最长的标记长度是{}'.format(min(label_lens),max(label_lens)))
 
@@ -89,8 +92,7 @@ class Dataloader(object):
                                       'r', encoding='utf-8').read()) for i in self.val_index}
         self.train_len_dict=sorted(train_len_dict.items(),key=lambda item:item[1])
         self.val_len_dict=sorted(val_len_dict.items(),key=lambda item:item[1])
-        # print(self.train_len_dict)
-        # print(self.val_len_dict)
+
     def generator(self,is_train=True):
         """
         batch size=1 因为训练样本数量不多，没必要padding了
@@ -131,8 +133,6 @@ class Dataloader(object):
                     begin = int(temp[1])
                     end = int(temp[-1].strip('\n'))
                     labels[i, begin:end,0] = 1
-            # labels = K.one_hot(labels, 2)
-            # print(labels.shape)
             yield inputs, labels
             start = (start + self.batch_size) % len(index) if flag==False else 0
 
@@ -157,28 +157,30 @@ class Mymodel(object):
         x=Dropout(self.dropout_rate)(x)
         for i in range(self.depth):
             x = Bidirectional(LSTM(self.hidden, return_sequences=True),merge_mode='concat')(x)
-        # crf = CRF()
         if use_crf:
             pass
+            # x=CRF(1)(x)
             # x=Dense(self.hidden,activation='relu')(x)
             # x=Dense(1,activation='sigmoid')(x)
             # x =crf(x)
         else:
-            x=Dense(self.hidden,activation='relu')(x)
-            x=Dense(1,activation='sigmoid')(x)
+            x=Dense(1024,activation='relu')(x)
+            x=Dropout(0.3)(x)
+            x=Dense(1024,activation='relu')(x)
+            x=TimeDistributed(Dense(1,activation='sigmoid'))(x)
         model=Model(input_layer,x)
         if use_crf == False:
             model.compile(optimizer=Adam(0.001), loss='binary_crossentropy', metrics=['acc'])
         else:
             pass
-            # model.compile(optimizer=Adam(0.001),loss=crf.loss,metrics=[crf.accuracy])
+            # model.compile(optimizer=Adam(0.001),loss=crf_loss,metrics=[crf_accuracy])
         model.summary()
         return model
 
 def train(use_crf=False,use_word2vec=True):
     model_name='use_word2vec_bilstmcrf-depth_1-{epoch:03d}--{val_loss:.5f}--{val_acc:.5f}.hdf5' if use_word2vec else 'bilstmcrf-depth_1-{epoch:03d}--{val_loss:.5f}--{val_acc:.5f}.hdf5'
     data=Dataloader(use_word2vec=use_word2vec)
-    model=Mymodel(vocab_size=data.char_num,hidden=256,dropout_rate=0.3,depth=1,embedding_dim=data.embedding_dim,
+    model=Mymodel(vocab_size=data.char_num,hidden=256,dropout_rate=0.1,depth=1,embedding_dim=data.embedding_dim,
                   use_word2vec=use_word2vec,
                   embedding_matrxi=None if use_word2vec==False else data.embedding_matrix
                   ).build_network(use_crf=use_crf)
@@ -194,17 +196,26 @@ def train(use_crf=False,use_word2vec=True):
         class_weight=[1,6.5] if use_crf==False else None,
         callbacks=[
             TensorBoard('logs'),
-            ReduceLROnPlateau(monitor='val_loss',patience=7,verbose=1),
-            EarlyStopping(monitor='val_loss',patience=40,verbose=1,restore_best_weights=True),
+            ReduceLROnPlateau(monitor='val_acc',patience=7,verbose=1),
+            EarlyStopping(monitor='val_acc',patience=40,verbose=1,restore_best_weights=True),
             ModelCheckpoint(filepath=os.path.join('models',model_name),verbose=1,save_weights_only=False,
-                            save_best_only=True)
+                            save_best_only=True,monitor='val_acc')
         ]
     )
-def predict(use_crf=False,model_path='models/bilstmcrf-depth_1-006--0.36095--0.88239.hdf5'):
-    data=Dataloader()
-    model = Mymodel(vocab_size=data.char_num, hidden=256, dropout_rate=0.3, depth=1).build_network(use_crf=use_crf)
+def predict(use_crf=False,use_word2vec=True,model_path='models/bilstmcrf-depth_1-006--0.36095--0.88239.hdf5',
+            mode=1):
+    data = Dataloader(use_word2vec=use_word2vec)
+    model = Mymodel(vocab_size=data.char_num, hidden=256, dropout_rate=0.3, depth=1, embedding_dim=data.embedding_dim,
+                    use_word2vec=use_word2vec,
+                    embedding_matrxi=None if use_word2vec == False else data.embedding_matrix
+                    ).build_network(use_crf=use_crf)
     model.load_weights(model_path)
-    result=open('data/result_SI_2.txt','w')
+    name_dict={
+        1:'data/result_SI_recall.txt',
+        2:'data/result_SI_precision.txt',
+        3:'data/result_SI_m.txt'
+    }
+    result = open(name_dict[mode], 'w')
     #articleid\tindex\tindex\n
     for article in os.listdir(data.dev_articles):
         path=os.path.join(data.dev_articles,article)
@@ -214,31 +225,126 @@ def predict(use_crf=False,model_path='models/bilstmcrf-depth_1-006--0.36095--0.8
             inputs.append(data.SI_token.word_index.get(i,0))
         inputs=np.array(inputs)
         inputs=np.expand_dims(inputs,axis=0)
-        try:
-            pred = model.predict(inputs)
-            prob=pred[0,:,0]
-            dicts={i:prob[i] for i in range(len(prob))}
-            dicts=sorted(dicts.items(),key=lambda item:item[1])
-            #0.866
-            zero_num=int(0.866*len(prob))+1
-            mask=[0]*len(prob)
-            for i in range(zero_num,len(prob)):
-                mask[dicts[i][0]]=1
-            list=[]
-            temp=[]
-            for i in range(len(mask)):
-                if mask[i]==1:
-                    temp.append(i)
+        if mode==1:
+            try:
+                pred = model.predict(inputs)
+                prob = pred[0, :, 0]
+                print(min(prob), max(prob))
+                dicts = {i: prob[i] for i in range(len(prob))}
+                dicts = sorted(dicts.items(), key=lambda item: item[1])
+                # 0.866
+                zero_num = int(0.866 * len(prob)) + 1
+                mask = [0] * len(prob)
+                for i in range(zero_num, len(prob)):
+                    mask[dicts[i][0]] = 1
+                list = []
+                temp = []
+                for i in range(len(mask)):
+                    if mask[i] == 1:
+                        temp.append(i)
+                    else:
+                        if temp != [] and len(temp) >= 2:
+                            list.append([temp[0], temp[-1]])
+                            result.write(article.strip('article').strip('.txt') + '\t' + str(temp[0]) + '\t' + str(
+                                temp[-1]) + '\n')
+                        temp = []
+                print(article + ' Done!!')
+
+            except:
+                print('error ' + article)
+        elif mode==2:
+            try:
+                pred = model.predict(inputs)
+                prob = pred[0, :, 0]
+                print(min(prob), max(prob))
+                list=[]
+                temp=[]
+                for p in range(len(prob)):
+                    if prob[p]>=0.5:
+                        temp.append(p)
+                    else:
+                        if temp!=[] and len(temp)>=2:
+                            list.append([temp[0],temp[-1]])
+                            result.write(article.strip('article').strip('.txt') + '\t' + str(temp[0]) + '\t' + str(
+                                temp[-1]) + '\n')
+                            temp = []
+                print(article + ' Done!!')
+            except Exception as e:
+                print(article,e)
+        elif mode==3:
+            try:
+                pred = model.predict(inputs)
+                prob = pred[0, :, 0]
+                print(min(prob), max(prob))
+                if max(prob)>=0.5:
+                    list = []
+                    temp = []
+                    for p in range(len(prob)):
+                        if prob[p] >= 0.5:
+                            temp.append(p)
+                        else:
+                            if temp != [] and len(temp) >= 2:
+                                list.append([temp[0], temp[-1]])
+                                result.write(article.strip('article').strip('.txt') + '\t' + str(temp[0]) + '\t' + str(
+                                    temp[-1]) + '\n')
+                                temp = []
                 else:
-                    if temp!=[] and len(temp)>=2:
-                        list.append([temp[0],temp[-1]])
-                        result.write(article.strip('article').strip('.txt')+'\t'+str(temp[0])+'\t'+str(temp[-1])+'\n')
-                    temp=[]
-            print(article+' Done!!')
-
-        except:
-            print('error '+article)
+                    dicts = {i: prob[i] for i in range(len(prob))}
+                    dicts = sorted(dicts.items(), key=lambda item: item[1])
+                    # 0.866
+                    zero_num = int(0.866 * len(prob)) + 1
+                    mask = [0] * len(prob)
+                    for i in range(zero_num, len(prob)):
+                        mask[dicts[i][0]] = 1
+                    list = []
+                    temp = []
+                    for i in range(len(mask)):
+                        if mask[i] == 1:
+                            temp.append(i)
+                        else:
+                            if temp != [] and len(temp) >= 2:
+                                list.append([temp[0], temp[-1]])
+                                result.write(article.strip('article').strip('.txt') + '\t' + str(temp[0]) + '\t' + str(
+                                    temp[-1]) + '\n')
+                            temp = []
+                print(article + ' Done!!')
+            except Exception as e:
+                print(article,e)
     result.close()
-# train(use_crf=False)
-train(use_crf=False,use_word2vec=False)
-
+def merge_prediction(p='data/result_SI_precision.txt',r='data/result_SI_recall.txt',
+                     mode=1):
+    p=open(p,'r',encoding='utf-8').readlines()
+    r=open(r,'r',encoding='utf-8').readlines()
+    if mode==1:
+        r = r + p
+        r = sorted(r)
+        with open('data/submit_merge_1.txt', 'w', encoding='utf-8') as z:
+            z.write(''.join(r))
+        z.close()
+    elif mode==2:
+        from collections import defaultdict
+        dict_p=defaultdict(list)
+        for i in p:
+            temp=i.split('\t')[0]
+            dict_p[temp].append(i)
+        for i in r:
+            temp=i.split('\t')[0]
+            if temp not in dict_p.keys():
+                dict_p[temp].append(i)
+        res=[]
+        for i in dict_p.keys():
+            for j in dict_p[i]:
+                res+=j
+        with open('data/submit_merge_2.txt', 'w', encoding='utf-8') as z:
+            z.write(''.join(res))
+        z.close()
+def main(is_train,model_path=None,use_crf=False,use_word2vec=True):
+    if is_train==True:
+        train(use_crf=use_crf,use_word2vec=use_word2vec)
+    else:
+        if model_path==None:
+            raise ValueError('请输入模型路径')
+        else:
+            predict(use_crf=use_crf, use_word2vec=use_word2vec, model_path=model_path,mode=1)
+            predict(use_crf=use_crf, use_word2vec=use_word2vec, model_path=model_path,mode=2)
+            merge_prediction(mode=1)
