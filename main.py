@@ -267,7 +267,7 @@ def predict(use_crf=False,use_word2vec=True,model_path='models/bilstmcrf-depth_1
                             list.append([temp[0],temp[-1]])
                             result.write(article.strip('article').strip('.txt') + '\t' + str(temp[0]) + '\t' + str(
                                 temp[-1]) + '\n')
-                            temp = []
+                        temp = []
                 print(article + ' Done!!')
             except Exception as e:
                 print(article,e)
@@ -287,7 +287,7 @@ def predict(use_crf=False,use_word2vec=True,model_path='models/bilstmcrf-depth_1
                                 list.append([temp[0], temp[-1]])
                                 result.write(article.strip('article').strip('.txt') + '\t' + str(temp[0]) + '\t' + str(
                                     temp[-1]) + '\n')
-                                temp = []
+                            temp = []
                 else:
                     dicts = {i: prob[i] for i in range(len(prob))}
                     dicts = sorted(dicts.items(), key=lambda item: item[1])
@@ -347,4 +347,7 @@ def main(is_train,model_path=None,use_crf=False,use_word2vec=True):
         else:
             predict(use_crf=use_crf, use_word2vec=use_word2vec, model_path=model_path,mode=1)
             predict(use_crf=use_crf, use_word2vec=use_word2vec, model_path=model_path,mode=2)
+            predict(use_crf=use_crf, use_word2vec=use_word2vec, model_path=model_path, mode=3)
             merge_prediction(mode=1)
+
+main(is_train=False,model_path='models/use_word2vec_bilstmcrf-depth_1-015--0.34168--0.88072.hdf5')

@@ -59,8 +59,8 @@ class f1score(Callback):
         self.val_precisions = []
 
     def on_epoch_end(self, epoch, logs=None):
-        val_predict = list(map(boolMap, self.model.predict([self.validation_data[0], self.validation_data[1]])))
-        val_targ = self.validation_data[2]
+        val_predict = (np.asarray(self.model.predict(self.validation_data[0]))).round()
+        val_targ = self.validation_data[1]
         _val_f1 = f1_score(val_targ, val_predict)
         _val_recall = recall_score(val_targ, val_predict)
         _val_precision = precision_score(val_targ, val_predict)
@@ -75,6 +75,7 @@ class f1score(Callback):
         else:
             print("val f1: {}, but not the best f1".format(_val_f1))
         return
+
 class Wordlevelloader(object):
     def __init__(self,
                  train_dir='data/train-word-level',
@@ -284,7 +285,7 @@ class Task11(object):
         self.embedding_dim = embedding_dim
         self.use_pretained_embedding = use_pretained_embedding
         self.pretained_embedding_model = pretained_embedding_model
-    def train(self,use_crf=False,hidden=512,dropout=0.1,depth=1):
+    def train(self,use_crf=False,hidden=512,dropout=0.1,depth=1,predict=False):
         model_att=[]
         if self.use_pretained_embedding:
             model_att.append('use_wordembedding_matrix')
@@ -316,41 +317,130 @@ class Task11(object):
             embedding_matrxi=data.embedding_matrix,
             embedding_dim=data.post_dim
         ).build_network(use_crf=use_crf)
-        model.fit_generator(
-            generator=data.generator(is_train=True),
-            steps_per_epoch=data.steps_per_epoch,
-            validation_data=data.generator(is_train=False),
-            validation_steps=data.val_steps_per_epoch,
-            verbose=1,
-            initial_epoch=0,
-            epochs=100,
-            class_weight=[1-data.zero_rate, data.zero_rate] if use_crf == False else None,
-            callbacks=[
-                TensorBoard('logs'),
-                ReduceLROnPlateau(monitor='val_f1', patience=5, verbose=1,mode='max'),
-                EarlyStopping(monitor='val_f1', patience=28, verbose=1, restore_best_weights=True,mode='max'),
-                # ModelCheckpoint(filepath=os.path.join('models', model_full_name), verbose=1, save_weights_only=False,
-                #                 save_best_only=True, monitor='val_acc'),
-                f1score(filepath=os.path.join('models', model_full_name))
-            ]
-        )
+        if predict==False:
+            model.fit_generator(
+                generator=data.generator(is_train=True),
+                steps_per_epoch=data.steps_per_epoch,
+                validation_data=data.generator(is_train=False),
+                validation_steps=data.val_steps_per_epoch,
+                verbose=1,
+                initial_epoch=0,
+                epochs=100,
+                class_weight=[1 - data.zero_rate, data.zero_rate] if use_crf == False else None,
+                callbacks=[
+                    TensorBoard('logs'),
+                    ReduceLROnPlateau(monitor='val_f1', patience=5, verbose=1, mode='max'),
+                    EarlyStopping(monitor='val_f1', patience=28, verbose=1, restore_best_weights=True, mode='max'),
+                    ModelCheckpoint(filepath=os.path.join('models', model_full_name), verbose=1,
+                                    save_weights_only=False,
+                                    save_best_only=True, monitor='val_f1', mode='max'),
+                    # f1score(filepath=os.path.join('models', model_full_name))
+                ]
+            )
+        else:
+            return data,model
+    def predict(self,model_path,use_crf=False,hidden=512,dropout=0.1,depth=1):
+        data,model=self.train(use_crf=use_crf,hidden=hidden,dropout=dropout,depth=depth,
+                              predict=True)
+        print('开始导入模型...')
+        model.load_weights(model_path)
+        print('导入模型成功！')
+        txt_name=model_path.split('/')[-1].strip('.hdf5')
+        all_res = str()
+        result_strict = open('submissions/{}_strict_submission.txt'.format(txt_name), 'w',
+                             encoding='utf-8')
+        result_soft= open('submissions/{}_soft_submission.txt'.format(txt_name), 'w',
+                                encoding='utf-8')
+        result_mid = open('submissions/{}_mid_submission.txt'.format(txt_name), 'w',
+                           encoding='utf-8')
+        result_strict_soft_merge = open('submissions/{}_strict_soft_merge_submission.txt'.format(txt_name), 'w',
+                          encoding='utf-8')
+        for idx,i in enumerate(os.listdir(data.dev_index_dir)):
+            article_start_end=np.load(os.path.join(data.dev_index_dir,i))
+            test_article=np.expand_dims(data.test_sequences[idx],axis=0)
+            pred=model.predict(test_article)
+            result_id=i.strip('article').strip('_word_start_end_index.npy')
+            prob=pred[0:,:,0]
+            dicts = {w: prob[w] for w in range(len(prob))}
+            dict_sorted = sorted(dicts.items(), key=lambda item: item[1])
+            zero_num = int(data.zero_rate * len(prob)) + 1
+            mask = [0] * len(prob)
+            for w in range(zero_num, len(prob)):
+                mask[dict_sorted[w][0]] = 1
+            #第一种预测，严格按照大于0.5来做
+            print(result_id,min(prob), max(prob))
+            if max(prob)>0.5:
+                temp = list()
+                for p in range(len(prob)):
+                    if prob[p] > 0.5:
+                        temp.append(p)
+                    else:
+                        if len(temp) >= 1:
+                            all_res += result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
+                                article_start_end[temp[-1]][1]) + '\n'
+                            result_strict.write(result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
+                                article_start_end[temp[-1]][1]) + '\n')
+                            zz = data.test_sequences[idx][temp[0]:temp[-1]]
+                            print('strict-mode中选择的句子:',data.token.sequences_to_texts(zz))
+                        temp = list()
+            print('\033[1;31;43m{}\033[0m'.format(result_id+' strict-mode Done!!!'))
+            #第二种预测，按照0单词和1单词的比例分布,从低到高排列，选择最后比例个数的单词作为1
+            temp = list()
+            for w in range(len(mask)):
+                if mask[w] == 1:
+                    temp.append(w)
+                else:
+                    if len(temp)>=1:
+                        all_res += result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
+                            article_start_end[temp[-1]][1]) + '\n'
+                        result_soft.write(result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
+                            article_start_end[temp[-1]][1]) + '\n')
+                        zz = data.test_sequences[idx][temp[0]:temp[-1]]
+                        print('soft-mode中选择的句子:', data.token.sequences_to_texts(zz))
+                    temp=list()
+            print('\033[1;31;40m{}\033[0m'.format(result_id + ' soft-mode Done!!!'))
+            #第三种预测：当最大的概率大于0.5时，就用strict模式，否则就是soft模式
+            if max(prob) > 0.5:
+                temp=list()
+                for p in range(len(prob)):
+                    if prob[p] > 0.5:
+                        temp.append(p)
+                    else:
+                        if len(temp) >= 1:
+                            all_res += result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
+                                article_start_end[temp[-1]][1]) + '\n'
+                            result_mid.write(result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
+                                article_start_end[temp[-1]][1]) + '\n')
+                            zz = data.test_sequences[idx][temp[0]:temp[-1]]
+                            print('mid-mode中选择的句子:', data.token.sequences_to_texts(zz))
+                        temp = list()
+            else:
+                temp = list()
+                for w in range(len(mask)):
+                    if mask[w] == 1:
+                        temp.append(w)
+                    else:
+                        if len(temp) >= 1:
+                            all_res += result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
+                                article_start_end[temp[-1]][1]) + '\n'
+                            result_mid.write(result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
+                                article_start_end[temp[-1]][1]) + '\n')
+                            zz = data.test_sequences[idx][temp[0]:temp[-1]]
+                            print('mid-mode中选择的句子:', data.token.sequences_to_texts(zz))
+                        temp = list()
+            print('\033[1;33;40m{}\033[0m'.format(result_id + ' mid-mode Done!!!'))
+        result_strict.close()
+        result_soft.close()
+        result_mid.close()
+        result_strict_soft_merge.write(all_res)
+        result_strict_soft_merge.close()
 if __name__=='__main__':
     #'F:\glove.840B.300d\glove.840B.300d.txt'
     #'./glove/glove.840B.300d.txt'
     t=Task11(
         batch_size=1,embedding_dim=300,use_pretained_embedding=True,
-        pretained_embedding_model='./glove/glove.6B.300d.txt'
+        pretained_embedding_model='F:\glove.6B\glove.6B.300d.txt'
     )
-    t.train(use_crf=False,hidden=512,dropout=0.1,depth=1)
-
-
-#wing.nus@weisshorn.d2.comp.nus.edu.sg:/home/wing.nus/lishuai/SemEvalTask11/glove/
-
-
-
-
-
-
-
-
-
+    t.predict(model_path='models/use_wordembedding_matrix--bilstm--depth_1--007--0.37131--0.84742.hdf5',
+              use_crf=False,depth=1)
+    # t.train(use_crf=False,hidden=512,dropout=0.1,depth=1)
