@@ -297,7 +297,7 @@ class Task11(object):
         else:
             model_att.append('bilstm')
         model_att.append('depth:{}'.format(str(depth)))
-        model_full_name='--'.join(model_att)+'--{epoch:03d}--{val_loss:.5f}--{val_acc:.5f}.hdf5'
+        model_full_name='--'.join(model_att)+'--{epoch:03d}--{val_loss:.5f}--{val_acc:.5f}--{{val_f1:.5f}}.hdf5'
         data=Wordlevelloader(
             train_dir=self.train_dir,
             dev_dir=self.dev_dir,
@@ -330,11 +330,11 @@ class Task11(object):
                 class_weight=[1 - data.zero_rate, data.zero_rate] if use_crf == False else None,
                 callbacks=[
                     TensorBoard('logs'),
-                    ReduceLROnPlateau(monitor='val_f1', patience=5, verbose=1, mode='max'),
-                    EarlyStopping(monitor='val_f1', patience=28, verbose=1, restore_best_weights=True, mode='max'),
+                    ReduceLROnPlateau(monitor='val_acc', patience=5, verbose=1, mode='max'),
+                    EarlyStopping(monitor='val_acc', patience=28, verbose=1, restore_best_weights=True, mode='max'),
                     ModelCheckpoint(filepath=os.path.join('models', model_full_name), verbose=1,
                                     save_weights_only=False,
-                                    save_best_only=True, monitor='val_f1', mode='max'),
+                                    save_best_only=True, monitor='val_acc', mode='max'),
                     # f1score(filepath=os.path.join('models', model_full_name))
                 ]
             )
@@ -357,7 +357,13 @@ class Task11(object):
         result_strict_soft_merge = open('data/submissions/{}_strict_soft_merge_submission.txt'.format(txt_name), 'w',
                           encoding='utf-8')
         for idx,i in enumerate(os.listdir(data.dev_index_dir)):
+
+            dev_article_name=i.replace('_word_start_end_index.npy','.txt')
+            raw_f = open(os.path.join(data.dev_dir, dev_article_name), 'r', encoding='utf-8').read()
+
+            word_level_data=open(os.path.join('data/dev-word-level', dev_article_name), 'r', encoding='utf-8').read()
             article_start_end=np.load(os.path.join(data.dev_index_dir,i))
+
             test_article=np.expand_dims(data.test_sequences[idx],axis=0)
             pred=model.predict(test_article)
             result_id=i.strip('article').strip('_word_start_end_index.npy')
@@ -371,18 +377,20 @@ class Task11(object):
             #第一种预测，严格按照大于0.5来做
             print(result_id,min(prob), max(prob))
             if max(prob)>0.5:
-                temp = list()
+                temp = []
                 for p in range(len(prob)):
                     if prob[p] > 0.5:
                         temp.append(p)
                     else:
                         if len(temp) >= 1:
-                            all_res += result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
-                                article_start_end[temp[-1]][1]) + '\n'
-                            result_strict.write(result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
-                                article_start_end[temp[-1]][1]) + '\n')
-                            zz = data.test_sequences[idx][temp[0]:temp[-1]]
-                            print('strict-mode中选择的句子:',data.token.sequences_to_texts(zz))
+                            all_res += result_id + '\t' + str(article_start_end[temp[0]][1]) + '\t' + str(
+                                article_start_end[temp[-1]][2]) + '\n'
+                            result_strict.write(result_id + '\t' + str(article_start_end[temp[0]][1]) + '\t' + str(
+                                article_start_end[temp[-1]][2]) + '\n')
+                            zz = data.test_sequences[idx][temp[0]:temp[-1]+1]
+                            print('strict-mode中选择的句子:',data.token.sequences_to_texts([zz]))
+                            print('word level 选择的句子:{}'.format(word_level_data.split()[temp[0]:temp[-1]+1]))
+                            print('strct-mode中选择的原文的句子:',raw_f[int(article_start_end[temp[0]][1]):int(article_start_end[temp[-1]][2])])
                         temp = list()
             print('\033[1;31;43m{}\033[0m'.format(result_id+' strict-mode Done!!!'))
             #第二种预测，按照0单词和1单词的比例分布,从低到高排列，选择最后比例个数的单词作为1
@@ -392,12 +400,12 @@ class Task11(object):
                     temp.append(w)
                 else:
                     if len(temp)>=1:
-                        all_res += result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
-                            article_start_end[temp[-1]][1]) + '\n'
-                        result_soft.write(result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
-                            article_start_end[temp[-1]][1]) + '\n')
-                        zz = data.test_sequences[idx][temp[0]:temp[-1]]
-                        print('soft-mode中选择的句子:', data.token.sequences_to_texts(zz))
+                        all_res += result_id + '\t' + str(article_start_end[temp[0]][1]) + '\t' + str(
+                            article_start_end[temp[-1]][2]) + '\n'
+                        result_soft.write(result_id + '\t' + str(article_start_end[temp[0]][1]) + '\t' + str(
+                            article_start_end[temp[-1]][2]) + '\n')
+                        # zz = data.test_sequences[idx][temp[0]:temp[-1]]
+                        # print('soft-mode中选择的句子:', data.token.sequences_to_texts(zz))
                     temp=list()
             print('\033[1;31;40m{}\033[0m'.format(result_id + ' soft-mode Done!!!'))
             #第三种预测：当最大的概率大于0.5时，就用strict模式，否则就是soft模式
@@ -408,12 +416,12 @@ class Task11(object):
                         temp.append(p)
                     else:
                         if len(temp) >= 1:
-                            all_res += result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
-                                article_start_end[temp[-1]][1]) + '\n'
-                            result_mid.write(result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
-                                article_start_end[temp[-1]][1]) + '\n')
-                            zz = data.test_sequences[idx][temp[0]:temp[-1]]
-                            print('mid-mode中选择的句子:', data.token.sequences_to_texts(zz))
+                            all_res += result_id + '\t' + str(article_start_end[temp[0]][1]) + '\t' + str(
+                                article_start_end[temp[-1]][2]) + '\n'
+                            result_mid.write(result_id + '\t' + str(article_start_end[temp[0]][1]) + '\t' + str(
+                                article_start_end[temp[-1]][2]) + '\n')
+                            # zz = data.test_sequences[idx][temp[0]:temp[-1]]
+                            # print('mid-mode中选择的句子:', data.token.sequences_to_texts(zz))
                         temp = list()
             else:
                 temp = list()
@@ -422,12 +430,12 @@ class Task11(object):
                         temp.append(w)
                     else:
                         if len(temp) >= 1:
-                            all_res += result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
-                                article_start_end[temp[-1]][1]) + '\n'
-                            result_mid.write(result_id + '\t' + str(article_start_end[temp[0]][0]) + '\t' + str(
-                                article_start_end[temp[-1]][1]) + '\n')
-                            zz = data.test_sequences[idx][temp[0]:temp[-1]]
-                            print('mid-mode中选择的句子:', data.token.sequences_to_texts(zz))
+                            all_res += result_id + '\t' + str(article_start_end[temp[0]][1]) + '\t' + str(
+                                article_start_end[temp[-1]][2]) + '\n'
+                            result_mid.write(result_id + '\t' + str(article_start_end[temp[0]][1]) + '\t' + str(
+                                article_start_end[temp[-1]][2]) + '\n')
+                            # zz = data.test_sequences[idx][temp[0]:temp[-1]]
+                            # print('mid-mode中选择的句子:', data.token.sequences_to_texts(zz))
                         temp = list()
             print('\033[1;33;40m{}\033[0m'.format(result_id + ' mid-mode Done!!!'))
         result_strict.close()
@@ -435,13 +443,116 @@ class Task11(object):
         result_mid.close()
         result_strict_soft_merge.write(all_res)
         result_strict_soft_merge.close()
+    def simple_predict(self,model_path,use_crf=False,hidden=512,dropout=0.1,depth=1):
+        data, model = self.train(use_crf=use_crf, hidden=hidden, dropout=dropout, depth=depth,
+                                 predict=True)
+        print('开始导入模型...')
+        model.load_weights(model_path)
+        print('导入模型成功！')
+        txt_name = model_path.split('/')[-1].strip('.hdf5')
+        prob_file=open('data/submissions/{}_probs.txt'.format(txt_name),'w',encoding='utf-8')
+        for idx, i in enumerate(os.listdir(data.dev_index_dir)):
+            dev_article_name = i.replace('_word_start_end_index.npy', '.txt')
+            test_article = np.expand_dims(data.test_sequences[idx], axis=0)
+            pred = model.predict(test_article)
+            prob=pred[0,:,0]
+            te=[str(p) for p in prob]
+            prob_file.write(dev_article_name+'\t'+' '.join(te)+'\n')
+        prob_file.close()
+        prediction = open('data/submissions/{}_probs.txt'.format(txt_name),
+                          'r', encoding='utf-8').readlines()
+        all_res = str()
+        result_strict = open('data/submissions/{}_strict_submission.txt'.format(txt_name), 'w',
+                             encoding='utf-8')
+        result_soft = open('data/submissions/{}_soft_submission.txt'.format(txt_name), 'w',
+                           encoding='utf-8')
+        result_mid = open('data/submissions/{}_mid_submission.txt'.format(txt_name), 'w',
+                          encoding='utf-8')
+        result_strict_soft_merge = open('data/submissions/{}_strict_soft_merge_submission.txt'.format(txt_name), 'w',
+                                        encoding='utf-8')
+        for line in prediction:
+            temp = line.strip('\n').split('\t')
+            article_name = temp[0]
+            article_id=article_name.strip('.txt').strip('article')
+            prob = [float(i) for i in temp[1].split(' ')]
+            dicts = {w: prob[w] for w in range(len(prob))}
+            dict_sorted = sorted(dicts.items(), key=lambda item: item[1])
+            zero_num = int(data.zero_rate * len(prob)) + 1
+            mask = [0] * len(prob)
+            for w in range(zero_num, len(prob)):
+                mask[dict_sorted[w][0]] = 1
+            raw_f = open('data/dev-articles/{}'.format(article_name), 'r', encoding='utf-8').read()
+            word_level_data = open('data/dev-word-level/{}'.format(article_name), 'r', encoding='utf-8').read().split(
+                ' ')
+            word_index = np.load(
+                'data/dev-word-index/{}'.format(article_name.replace('.txt', '_word_start_end_index.npy')))
+            #第一种严格按照大于0.5
+            if max(prob)>0.5:
+                temp = []
+                for i in range(len(prob)):
+                    if prob[i] > 0.5:
+                        temp.append(i)
+                    else:
+                        if len(temp) >= 1:
+                            s, e = int(word_index[temp[0]][1]), int(word_index[temp[-1]][2])
+                            print('根据word level找出的单词组是{}'.format(word_level_data[temp[0]:temp[-1] + 1]))
+                            print('根据原文找出的单词组是：{}'.format(raw_f[s:e]))
+                            result_strict.write(article_id + '\t' + str(s) + '\t' + str(e) + '\n')
+                            all_res += article_id + '\t' + str(s) + '\t' + str(e) + '\n'
+                        temp = list()
+            print('\033[1;31;43m{}\033[0m'.format(article_id + ' strict-mode Done!!!'))
+            #第二种，按照一定分布
+            temp=[]
+            for i in range(len(prob)):
+                if mask[i]==1:
+                    temp.append(i)
+                else:
+                    if len(temp)>=1:
+                        s, e = int(word_index[temp[0]][1]), int(word_index[temp[-1]][2])
+                        print('根据word level找出的单词组是{}'.format(word_level_data[temp[0]:temp[-1] + 1]))
+                        print('根据原文找出的单词组是：{}'.format(raw_f[s:e]))
+                        result_soft.write(article_id + '\t' + str(s) + '\t' + str(e) + '\n')
+                        all_res += article_id + '\t' + str(s) + '\t' + str(e) + '\n'
+                    temp=list()
+            print('\033[1;31;40m{}\033[0m'.format(article_id + ' soft-mode Done!!!'))
+            #第三种，结合两者
+            if max(prob)>0.5:
+                temp = []
+                for i in range(len(prob)):
+                    if prob[i] > 0.5:
+                        temp.append(i)
+                    else:
+                        if len(temp) >= 1:
+                            s, e = int(word_index[temp[0]][1]), int(word_index[temp[-1]][2])
+                            print('根据word level找出的单词组是{}'.format(word_level_data[temp[0]:temp[-1] + 1]))
+                            print('根据原文找出的单词组是：{}'.format(raw_f[s:e]))
+                            result_mid.write(article_id + '\t' + str(s) + '\t' + str(e) + '\n')
+                        temp = list()
+            else:
+                temp = []
+                for i in range(len(prob)):
+                    if mask[i] == 1:
+                        temp.append(i)
+                    else:
+                        if len(temp) >= 1:
+                            s, e = int(word_index[temp[0]][1]), int(word_index[temp[-1]][2])
+                            print('根据word level找出的单词组是{}'.format(word_level_data[temp[0]:temp[-1] + 1]))
+                            print('根据原文找出的单词组是：{}'.format(raw_f[s:e]))
+                            result_soft.write(article_id + '\t' + str(s) + '\t' + str(e) + '\n')
+                        temp = list()
+            print('\033[1;33;40m{}\033[0m'.format(article_id + ' mid-mode Done!!!'))
+        result_strict_soft_merge.write(all_res)
+        print('\033[1;33;45m{}\033[0m'.format('merge mode Done!!!'))
+        result_strict.close()
+        result_soft.close()
+        result_mid.close()
+        result_strict_soft_merge.close()
+
 if __name__=='__main__':
-    #'F:\glove.840B.300d\glove.840B.300d.txt'
-    #'./glove/glove.840B.300d.txt'
     t=Task11(
         batch_size=1,embedding_dim=300,use_pretained_embedding=True,
         pretained_embedding_model='F:\glove.6B\glove.6B.300d.txt'
     )
-    t.predict(model_path='models/use_wordembedding_matrix--bilstm--depth_1--007--0.37131--0.84742.hdf5',
-              use_crf=False,depth=1)
-    # t.train(use_crf=False,hidden=512,dropout=0.1,depth=1)
+    # t.simple_predict(model_path='models/use_wordembedding_matrix--bilstm--depth_1--007--0.37131--0.84742.hdf5',
+    #           use_crf=False,depth=1)
+    t.train(use_crf=False,hidden=512,dropout=0.3,depth=1)
