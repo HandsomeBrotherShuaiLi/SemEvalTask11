@@ -10,6 +10,7 @@ from keras.optimizers import Adam
 from sklearn.metrics import f1_score, recall_score, precision_score
 from keras.callbacks import Callback
 from keras import backend as K
+from tqdm import tqdm
 os.environ["CUDA_VISIBLE_DEVICES"] = "9"
 def f1(y_true, y_pred):
     def recall(y_true, y_pred):
@@ -184,7 +185,7 @@ class Wordlevelloader(object):
                     f = open(self.pretained_embedding_model, 'r', encoding='utf8')
                     dim = 0
                     count = 0
-                    for line in f:
+                    for line in tqdm(f):
                         values = line.split()
                         word = ''.join(values[:-300])
                         coefs = np.asarray(values[-300:], dtype='float32')
@@ -192,7 +193,7 @@ class Wordlevelloader(object):
                         dim = len(coefs)
                         embeddings_index[word] = coefs
                         count += 1
-                        print('导入第{}个词：{}'.format(count, word))
+                        # print('导入第{}个词：{}'.format(count, word))
                     f.close()
                     embedding_matrix = np.zeros(shape=(len(token.word_index) + 1, dim))
                     for word,i in token.word_index.items():
@@ -347,20 +348,20 @@ class Task11(object):
         print('导入模型成功！')
         txt_name=model_path.split('/')[-1].strip('.hdf5')
         all_res = str()
-        result_strict = open('submissions/{}_strict_submission.txt'.format(txt_name), 'w',
+        result_strict = open('data/submissions/{}_strict_submission.txt'.format(txt_name), 'w',
                              encoding='utf-8')
-        result_soft= open('submissions/{}_soft_submission.txt'.format(txt_name), 'w',
+        result_soft= open('data/submissions/{}_soft_submission.txt'.format(txt_name), 'w',
                                 encoding='utf-8')
-        result_mid = open('submissions/{}_mid_submission.txt'.format(txt_name), 'w',
+        result_mid = open('data/submissions/{}_mid_submission.txt'.format(txt_name), 'w',
                            encoding='utf-8')
-        result_strict_soft_merge = open('submissions/{}_strict_soft_merge_submission.txt'.format(txt_name), 'w',
+        result_strict_soft_merge = open('data/submissions/{}_strict_soft_merge_submission.txt'.format(txt_name), 'w',
                           encoding='utf-8')
         for idx,i in enumerate(os.listdir(data.dev_index_dir)):
             article_start_end=np.load(os.path.join(data.dev_index_dir,i))
             test_article=np.expand_dims(data.test_sequences[idx],axis=0)
             pred=model.predict(test_article)
             result_id=i.strip('article').strip('_word_start_end_index.npy')
-            prob=pred[0:,:,0]
+            prob=pred[0,:,0]
             dicts = {w: prob[w] for w in range(len(prob))}
             dict_sorted = sorted(dicts.items(), key=lambda item: item[1])
             zero_num = int(data.zero_rate * len(prob)) + 1
