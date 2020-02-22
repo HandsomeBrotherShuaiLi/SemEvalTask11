@@ -10,7 +10,8 @@ import kashgari
 from keras_radam import RAdam
 from kashgari.tasks.labeling import BiLSTM_CRF_Model,BiGRU_CRF_Model,BiGRU_Model,BiLSTM_Model
 from kashgari.embeddings import BERTEmbedding,GPT2Embedding,WordEmbedding
-from kashgari.corpus import CONLL2003ENCorpus
+from tensorflow import keras
+import json
 train_dir='V2/datasets/train-articles'
 dev_dir='V2/datasets/dev-articles'
 test_dir='V2/test-articles'
@@ -53,16 +54,7 @@ class Dataloader(object):
         self.dev_dir=dev_dir
         self.split_rate=split_rate
         self.batch_size=batch_size
-        self.mask,self.token=self.init_mask(bert_len=512)
-        all_index=np.array(range(len(self.mask)))
-        val_num=int(self.split_rate*len(self.mask))
-        self.val_index=np.random.choice(all_index,size=val_num,replace=False)
-        self.train_index=np.array([i for i in all_index if i not in self.val_index])
-        self.train_steps=len(self.train_index)//self.batch_size
-        self.val_steps=len(self.val_index)//self.batch_size
-        print(self.token.word_index)
-        print('vocab number:{}\ntrain number:{}\nval number:{}'.format(len(self.token.word_index),len(self.train_index),
-                                                                       len(self.val_index)))
+
     def init_mask(self,bert_len=512):
         mask=[]
         vac=[]
@@ -87,24 +79,69 @@ class Dataloader(object):
         token=Tokenizer(char_level=True,lower=False)
         token.fit_on_texts(vac)
         return mask,token
-    def generator(self,is_train=True):
-        index=self.train_index if is_train else self.val_index
-        start=0
-        while True:
-            pass
+    def get_data(self,word_level=False,sentence_length=None):
+        if word_level==False:
+            #char 级别的处理
+            if sentence_length is None:
+                #整个文章全部送入模型
+                train_name=np.array(os.listdir(self.train_dir))
+                train_x,train_y,test_x,dev_x,val_x,val_y=[],[],[],[],[],[]
+                all_index=np.array(range(len(train_name)))
+                val_num=int(self.split_rate*len(train_name))
+                val_index=np.random.choice(all_index,size=val_num,replace=False)
+                train_index=np.array([i for i in all_index if i not in val_index])
+                train_names=train_name[train_index]
+                val_names=train_name[val_index]
+                for i in train_names:
+                    path=os.path.join(self.train_dir,i)
+                    f=open(path,'r',encoding='utf-8').read()
+                    train_x.append(list(f))
+                    label_path=os.path.join(self.label_dir,i.replace('.txt','.task1-SI.labels'))
+                    label=open(label_path,'r',encoding='utf-8').readlines()
+                    mask=['0']*len(f)
+                    for line in label:
+                        line=line.strip('\n').split('\t')
+                        mask[int(line[1]):int(line[2])]=['1']*(int(line[2])-int(line[1]))
+                    train_y.append(mask)
+                for i in val_names:
+                    path=os.path.join(self.train_dir,i)
+                    f=open(path,'r',encoding='utf-8').read()
+                    val_x.append(list(f))
+                    label_path=os.path.join(self.label_dir,i.replace('.txt','.task1-SI.labels'))
+                    label=open(label_path,'r',encoding='utf-8').readlines()
+                    mask=['0']*len(f)
+                    for line in label:
+                        line=line.strip('\n').split('\t')
+                        mask[int(line[1]):int(line[2])]=['1']*(int(line[2])-int(line[1]))
+                    val_y.append(mask)
+                for i in os.listdir(self.test_dir):
+                    path=os.path.join(self.test_dir,i)
+                    f=open(path,'r',encoding='utf-8').read()
+                    test_x.append(list(f))
+                for i in os.listdir(self.dev_dir):
+                    path=os.path.join(self.dev_dir,i)
+                    f=open(path,'r',encoding='utf-8').read()
+                    dev_x.append(list(f))
+                return train_x,train_y,val_x,val_y,test_x,dev_x
+
 
 class SemEval(object):
     def __init__(self,train_dir=train_dir,label_dir=label_dir,
-                 test_dir=test_dir,dev_dir=dev_dir,batch_size=8,split_rate=0.2):
+                 test_dir=test_dir,dev_dir=dev_dir,batch_size=8,split_rate=0.1,
+                 word_level=False,sentence_length=None):
         self.train_dir=train_dir
         self.label_dir=label_dir
         self.test_dir=test_dir
         self.dev_dir=dev_dir
         self.batch_size=batch_size
         self.split_rate=split_rate
+        self.word_level=word_level
+        self.sentence_length=sentence_length
         self.dataloader=Dataloader(train_dir=self.train_dir,label_dir=self.label_dir,
                                    test_dir=self.test_dir,dev_dir=self.dev_dir,
                                    batch_size=self.batch_size,split_rate=self.split_rate)
+        self.train_x,self.train_y,self.val_x,self.val_y,self.test_x,\
+        self.dev_x=self.dataloader.get_data(word_level,sentence_length)
     def build_model(self,model_name,embedding_name=None):
         emb_dict={
             'bert':BERTEmbedding(
@@ -116,25 +153,25 @@ class SemEval(object):
         }
 
         if model_name.lower()=='lstm-crf':
-            if embedding_name==None:
+            if embedding_name is None:
                 model=BiLSTM_CRF_Model()
             else:
                 emb=emb_dict[embedding_name.lower()]
                 model=BiLSTM_CRF_Model(emb)
         elif model_name.lower()=='gru-crf':
-            if embedding_name==None:
+            if embedding_name is None:
                 model=BiGRU_CRF_Model()
             else:
                 emb=emb_dict[embedding_name.lower()]
                 model=BiGRU_CRF_Model(emb)
         elif model_name.lower()=='lstm':
-            if embedding_name==None:
+            if embedding_name is None:
                 model=BiLSTM_Model()
             else:
                 emb=emb_dict[embedding_name.lower()]
                 model=BiLSTM_Model(emb)
         else:
-            if embedding_name==None:
+            if embedding_name is None:
                 model=BiGRU_Model()
             else:
                 emb=emb_dict[embedding_name.lower()]
@@ -142,13 +179,28 @@ class SemEval(object):
         return model
 
     def train(self,model_name,embedding_name=None):
-        model=self.build_model(model_name,embedding_name)
-        model.fit()
-
+        if not os.path.exists('saved_models'):
+            os.mkdir('saved_models')
+        Model=self.build_model(model_name,embedding_name)
+        Model.build_model(x_train=self.train_x,y_train=self.train_y,
+                          x_validate=self.val_x,y_validate=self.val_y)
+        opt=RAdam()
+        emb_str= 'No-embedding' if embedding_name is None else embedding_name
+        word_str='Word-level' if self.word_level else 'Char-level'
+        sentence='Var-length' if self.sentence_length is None else 'Fixed-length'
+        model_save_file='_'.join([model_name,word_str,sentence,emb_str])+'.h5'
+        Model.compile_model(optimizer=opt)
+        his=Model.fit(x_train=self.train_x,y_train=self.train_y,
+                  x_validate=self.val_x,y_validate=self.val_y,batch_size=8,epochs=200,
+                  callbacks=[
+                      keras.callbacks.ModelCheckpoint(os.path.join('saved_models',model_save_file),monitor='val_loss',
+                                                      verbose=1,save_weights_only=False,save_best_only=True),
+                      keras.callbacks.ReduceLROnPlateau(patience=6,verbose=1,monitor='val_loss'),
+                      keras.callbacks.TensorBoard('logs'),
+                      keras.callbacks.EarlyStopping(monitor='val_loss',patience=40,verbose=1)
+                  ])
+        json.dump(his.history,open('saved_models/{}.json'.format(model_save_file.strip('.h5')),'w',encoding='utf-8'))
 
 if __name__=='__main__':
-    train_x, train_y = CONLL2003ENCorpus.load_data('train')
-    valid_x, valid_y = CONLL2003ENCorpus.load_data('valid')
-    test_x, test_y = CONLL2003ENCorpus.load_data('test')
-    print(train_x[0],train_x[1])
-    print(train_y[0],train_y[1])
+    app=SemEval(word_level=False,sentence_length=None)
+    app.train(model_name='lstm-crf',embedding_name=None)
