@@ -1,5 +1,5 @@
-#SemEval 2020 Task 11   
-##DETECTION OF PROPAGANDA TECHNIQUES IN NEWS ARTICLES
-##Model
-##Train
-##Predict
+# SemEval 2020 Task 11   
+## DETECTION OF PROPAGANDA TECHNIQUES IN NEWS ARTICLES
+## Model
+## Train
+## Predict
