@@ -1,6 +1,7 @@
 import os,tqdm,numpy as np
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import tensorflow as tf
+from tensorflow.keras.optimizers import Adam,SGD
 from tensorflow.keras.backend import set_session
 config = tf.ConfigProto()
 config.gpu_options.per_process_gpu_memory_fraction = 0.5
@@ -210,16 +211,18 @@ class SemEval(object):
                                    batch_size=self.batch_size,split_rate=self.split_rate,
                                    word_level=self.word_level,fixed_length=self.fixed_length)
 
-    def train(self,model_name,embedding_name=None,monitor='val_f1'):
+    def train(self,model_name,embedding_name=None,monitor='val_acc',layer_number=2,lr=0.001,
+              op_setting='adam'):
         if not os.path.exists('saved_models'):
             os.mkdir('saved_models')
         emb_str= 'No-embedding' if embedding_name is None else embedding_name
         word_str='Word-level' if self.word_level else 'Char-level'
         sentence='Var-length' if self.fixed_length is None else 'Fixed-length-{}'.format(self.fixed_length)
-        model_save_file='_'.join([model_name,word_str,sentence,emb_str,monitor])+'.h5'
-        model,loss,metrics=CustomModels(model_name=model_name,vocab_size=len(self.dataloader.token.word_index),
-                           embedding_name=embedding_name).build_model()
-        model.compile(optimizer='adam',loss=loss,metrics=metrics+[f1])
+        model_save_file='_'.join([model_name,word_str,sentence,emb_str,monitor,str(layer_number)])+'.h5'
+        model,loss,metrics=CustomModels(model_name=model_name,vocab_size=len(self.dataloader.token.word_index)+1,
+                           embedding_name=embedding_name,layer_number=layer_number).build_model()
+        op=Adam(lr) if op_setting.lower()=='adam' else SGD(lr)
+        model.compile(optimizer=op,loss=loss,metrics=metrics+[f1])
         model.fit_generator(
             generator=self.dataloader.generator(is_train=True),
             steps_per_epoch=self.dataloader.train_steps,
@@ -236,10 +239,15 @@ class SemEval(object):
             ]
         )
     def predict(self,model_path):
-        model=tf.keras.models.load_model(model_path,compile=False)
         model_name=model_path.split('/')[-1].strip('.h5')
+        e_n=model_name.split('_')[-3] if model_name.split('_')[-3]!='No-embedding' else None
+        layer=int(model_name.split('_')[-1])
+        model,loss,metrics=CustomModels(model_name=model_name.split('_')[0],
+                           vocab_size=len(self.dataloader.token.word_index)+1,
+                           embedding_name=e_n,layer_number=layer).build_model()
+        model.load_weights(model_path)
+        print('vocab size:{}'.format(len(self.dataloader.token.word_index)))
         def helper(data:str):
-            print('start to predict {} dataset...'.format(data))
             result=defaultdict(list)
             dataset={
                 'dev':self.dataloader.dev,
@@ -252,10 +260,11 @@ class SemEval(object):
                 seg=np.squeeze(seg,axis=-1)
                 seg=np.expand_dims(seg,axis=0)
                 pred=np.squeeze(model.predict(seg)[0],axis=-1)
+                if model_name.split('_')[0].endswith('crf'):print(pred)
                 pro_index=np.where(pred>=0.5)
                 result[path]+=np.array(pro_index[0]+i).tolist()
-            json.dump(result,open('results/{}.json'.format(model_name),'w',encoding='utf-8'))
-            sub=open('results/{}.txt'.format(model_name),'w',encoding='utf-8')
+            json.dump(result,open('results/{}_{}.json'.format(data,model_name),'w',encoding='utf-8'))
+            sub=open('results/{}_{}.txt'.format(data,model_name),'w',encoding='utf-8')
             for path in tqdm.tqdm(result,total=len(result)):
                 all_index=result[path]
                 id=path.split('/')[-1].strip('.txt').strip('article')
@@ -277,5 +286,5 @@ class SemEval(object):
         helper('test')
 
 if __name__=='__main__':
-    app=SemEval(batch_size=16,word_level=False)
-    app.predict(model_path='saved_models/lstm_Char-level_Fixed-length-512_No-embedding.h5')
+    app=SemEval(batch_size=32,word_level=False)
+    app.train(model_name='lstm',embedding_name=None,monitor='val_acc')
