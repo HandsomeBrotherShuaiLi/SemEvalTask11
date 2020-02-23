@@ -495,8 +495,5 @@ class SemEval(object):
         helper_char_level('test')
 
 if __name__=='__main__':
-    # d=Dataloader(word_level=True,fixed_length=512)
-    # d.generator().__next__()
-    # d.generator().__next__()
     app=SemEval(batch_size=32,word_level=True,fixed_length=512,split_rate=0.1)
     app.train(model_name='lstm',embedding_name=None,layer_number=2)
