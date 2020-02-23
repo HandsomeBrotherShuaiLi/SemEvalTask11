@@ -466,52 +466,113 @@ class SemEval(object):
         else:
             model=load_model(model_path,compile=False)
         print('vocab size:{}'.format(len(self.dataloader.token.word_index)))
-        def helper_char_level(data:str):
-            """
+        if self.word_level==False:
+            for g in range(1,51):
+                self.helper_char_level(model_name=model_name,model=model,data='dev',gap=g)
+                self.helper_char_level(model_name=model_name,model=model,data='test',gap=g)
+        else:
+            for g in range(1,51):
+                self.helper_word_level(model_name=model_name,model=model,data='dev',gap=g)
+                self.helper_word_level(model_name=model_name,model=model,data='test',gap=g)
+    def helper_char_level(self,model,model_name,data:str,gap:int):
+        """
 
-            :param data:
-            :return:
-            """
-            result=defaultdict(list)
-            dataset={
-                'dev':self.dataloader.dev,
-                'test':self.dataloader.test
-            }
-            for line in tqdm.tqdm(dataset[data],total=len(dataset[data])):
-                i,j,path=line
-                f=open(path,'r',encoding='utf-8').read()[i:j]
-                seg=np.array(self.dataloader.token.texts_to_sequences(f))
-                seg=np.squeeze(seg,axis=-1)
+        :param data:
+        :return:
+        """
+        result=defaultdict(list)
+        dataset={
+            'dev':self.dataloader.dev,
+            'test':self.dataloader.test
+        }
+        for line in tqdm.tqdm(dataset[data],total=len(dataset[data])):
+            i,j,path=line
+            f=open(path,'r',encoding='utf-8').read()[i:j]
+            seg=np.array(self.dataloader.token.texts_to_sequences(f))
+            seg=np.squeeze(seg,axis=-1)
+            try:
                 seg=np.expand_dims(seg,axis=0)
                 pred=np.squeeze(model.predict(seg)[0],axis=-1)
+            except:
+                seg[np.where(seg>=len(self.dataloader.token.word_index))[0]]=0
+                seg=np.expand_dims(seg,axis=0)
+                pred=np.squeeze(model.predict(seg)[0],axis=-1)
+            if model_name.split('_')[0].endswith('crf'):print(pred)
+            pro_index=np.where(pred>=0.5)
+            result[path]+=np.array(pro_index[0]+i).tolist()
+        json.dump(result,open('results/{}_{}_{}.json'.format(data,model_name,gap),'w',encoding='utf-8'))
+        sub=open('results/{}_{}_{}.txt'.format(data,model_name,gap),'w',encoding='utf-8')
+        for path in tqdm.tqdm(result,total=len(result)):
+            all_index=result[path]
+            id=path.split('/')[-1].strip('.txt').strip('article')
+            if len(all_index)==0:
+                pass
+            elif len(all_index)==1:
+                sub.write('{}\t{}\t{}\n'.format(id,all_index[0],all_index[0]+1))
+            else:
+                start=all_index[0]
+                for c in range(1,len(all_index)):
+                    if all_index[c]-all_index[c-1]<=gap:
+                        pass
+                    else:
+                        end=all_index[c-1]+1
+                        sub.write('{}\t{}\t{}\n'.format(id,start,end))
+                        start=all_index[c]
+                sub.write('{}\t{}\t{}\n'.format(id,start,all_index[-1]+1))
+        sub.close()
+    def helper_word_level(self,model,model_name,data:str,gap:int):
+        result=defaultdict(list)
+        dataset={
+            'dev':self.dataloader.dev,
+            'test':self.dataloader.test
+        }
+        if self.fixed_length is None:
+            for line in tqdm.tqdm(dataset[data],total=len(dataset[data])):
+                f=np.load(line)
+                words=self.dataloader.token.texts_to_sequences(f[:,0])
+                words=np.squeeze(words,axis=-1)
+                words=np.expand_dims(words,axis=0)
+                pred=np.squeeze(model.predict(words)[0],axis=-1)
                 if model_name.split('_')[0].endswith('crf'):print(pred)
                 pro_index=np.where(pred>=0.5)
-                result[path]+=np.array(pro_index[0]+i).tolist()
-            json.dump(result,open('results/{}_{}.json'.format(data,model_name),'w',encoding='utf-8'))
-            sub=open('results/{}_{}.txt'.format(data,model_name),'w',encoding='utf-8')
-            for path in tqdm.tqdm(result,total=len(result)):
-                all_index=result[path]
-                id=path.split('/')[-1].strip('.txt').strip('article')
-                if len(all_index)==0:
-                    pass
-                elif len(all_index)==1:
-                    sub.write('{}\t{}\t{}\n'.format(id,all_index[0],all_index[0]+1))
-                else:
-                    start=all_index[0]
-                    for c in range(1,len(all_index)):
-                        if all_index[c]==all_index[c-1]+1:
-                            pass
-                        else:
-                            end=all_index[c-1]+1
-                            sub.write('{}\t{}\t{}\n'.format(id,start,end))
-                            start=all_index[c]
-            sub.close()
-        helper_char_level('dev')
-        helper_char_level('test')
-
+                result[line]+=pro_index[0].to_list()
+        else:
+            for line in tqdm.tqdm(dataset[data],total=len(dataset[data])):
+                s,e,path=line
+                f=np.load(path)
+                words=self.dataloader.token.texts_to_sequences(f[s:e,0])
+                words=np.squeeze(words,axis=-1)
+                words=np.expand_dims(words,axis=0)
+                pred=np.squeeze(model.predict(words)[0],axis=-1)
+                if model_name.split('_')[0].endswith('crf'):print(pred)
+                pro_index=np.where(pred>=0.5)
+                result[path]+=np.array(pro_index[0]+s).tolist()
+        json.dump(result,open('results/{}_{}_{}.json'.format(data,model_name,gap),'w',encoding='utf-8'))
+        sub=open('results/{}_{}_{}.txt'.format(data,model_name,gap),'w',encoding='utf-8')
+        for path in tqdm.tqdm(result,total=len(result)):
+            word_index=result[path]
+            word_start_end=np.load(path)
+            id=path.split('/')[-1].strip('.npy').strip('article')
+            if len(word_index)==0:
+                pass
+            elif len(word_index)==1:
+                sub.write('{}\t{}\t{}\n'.format(id,word_start_end[word_index[0],1],word_start_end[word_index[0],2]))
+            else:
+                start=word_index[0]
+                for c in range(1,len(word_index)):
+                    if word_index[c]-word_index[c-1]<=gap:
+                        pass
+                    else:
+                        end=word_start_end[word_index[c-1],2]
+                        sub.write('{}\t{}\t{}\n'.format(id,word_start_end[start,1],end))
+                        start=word_index[c]
+                sub.write('{}\t{}\t{}\n'.format(id,word_start_end[start,1],word_start_end[word_index[-1],2]))
+        sub.close()
 if __name__=='__main__':
     app=SemEval(batch_size=32,word_level=True,fixed_length=512,split_rate=0.1)
-    app.train(model_name='lstm',embedding_name=None,monitor='val_loss',layer_number=2,
-              op_setting='lazyadam',lr=0.001)
-
-
+    app.predict('saved_models/lstm_Word-level_lazyadam_Fixed-length-512_No-embedding_val_f1_2.h5')
+    app.predict('saved_models/lstm_Word-level_Fixed-length-512_No-embedding_val_acc_2.h5')
+    app.predict('saved_models/lstm_Word-level_lazyadam_Fixed-length-512_No-embedding_val_loss_2.h5')
+    app.predict('saved_models/lstm_Word-level_sgd_Fixed-length-512_No-embedding_val_f1_2.h5')
+    app=SemEval(batch_size=32,word_level=False,fixed_length=512,split_rate=0.1)
+    app.predict('saved_models/lstm_Char-level_Fixed-length-512_No-embedding_val_acc_2.h5')
