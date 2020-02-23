@@ -10,7 +10,7 @@ from keras.preprocessing.text import Tokenizer
 from models.Models import CustomModels
 from collections import defaultdict
 import json,string
-import tensorflow.keras.backend as K
+from models.CRF import f1
 from zhon.hanzi import punctuation as p1
 from zhon.pinyin import punctuation as p2
 train_dir='V2/datasets/train-articles'
@@ -24,35 +24,6 @@ label_dir='V2/datasets/train-labels-task1-span-identification'
 3. 词的embedding + BiLSTM
 4  字符+词（embedding)+BiLSTM
 """
-def f1(y_true, y_pred):
-    def recall(y_true, y_pred):
-        """Recall metric.
-
-        Only computes a batch-wise average of recall.
-
-        Computes the recall, a metric for multi-label classification of
-        how many relevant items are selected.
-        """
-        true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
-        possible_positives = K.sum(K.round(K.clip(y_true, 0, 1)))
-        recall = true_positives / (possible_positives + K.epsilon())
-        return recall
-
-    def precision(y_true, y_pred):
-        """Precision metric.
-
-        Only computes a batch-wise average of precision.
-
-        Computes the precision, a metric for multi-label classification of
-        how many selected items are relevant.
-        """
-        true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
-        predicted_positives = K.sum(K.round(K.clip(y_pred, 0, 1)))
-        precision = true_positives / (predicted_positives + K.epsilon())
-        return precision
-    precision = precision(y_true, y_pred)
-    recall = recall(y_true, y_pred)
-    return 2*((precision*recall)/(precision+recall+K.epsilon()))
 
 class Dataloader(object):
     def __init__(self,train_dir=train_dir,label_dir=label_dir,
