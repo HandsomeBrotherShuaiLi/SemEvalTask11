@@ -127,8 +127,77 @@ class Dataloader(object):
             sentences+=self.char2word(self.dev_dir)
             token=Tokenizer(char_level=False,lower=False)
             token.fit_on_texts(sentences)
-            if bert_len is None:pass
-            else:pass
+            if bert_len is None:
+                samples=[]
+                dev=[]
+                test=[]
+                for name in tqdm.tqdm(os.listdir('V2/word_level/train_articles'),
+                                      total=len(os.listdir('V2/word_level/train_articles'))):
+                    samples.append([os.path.join('V2/word_level/train_articles',name),os.path.join('V2/word_level/train_labels',name)])
+                for name in tqdm.tqdm(os.listdir('V2/word_level/dev'),total=len(os.listdir('V2/word_level/dev'))):
+                    dev.append(os.path.join('V2/word_level/dev',name))
+                for name in tqdm.tqdm(os.listdir('V2/word_level/test'),total=len(os.listdir('V2/word_level/test'))):
+                    test.append(os.path.join('V2/word_level/test',name))
+                return samples,token,dev,test
+            else:
+                samples=[]
+                dev=[]
+                test=[]
+                for name in tqdm.tqdm(os.listdir('V2/word_level/train_articles'),
+                                      total=len(os.listdir('V2/word_level/train_articles'))):
+                    f=np.load(os.path.join('V2/word_level/train_articles',name))
+                    word_number=len(f)
+                    j=0
+                    temp=[]
+                    while j<word_number:
+                        if j+bert_len<word_number:
+                            temp.append([j,j+bert_len,
+                                         os.path.join('V2/word_level/train_articles',name),
+                                         os.path.join('V2/word_level/train_labels',name)])
+                        else:
+                            temp.append([
+                                j,word_number,
+                                os.path.join('V2/word_level/train_articles',name),
+                                os.path.join('V2/word_level/train_labels',name)
+                            ])
+                        j+=bert_len
+                    samples+=temp
+                for name in tqdm.tqdm(os.listdir('V2/word_level/dev'),total=len(os.listdir('V2/word_level/dev'))):
+                    f=np.load(os.path.join('V2/word_level/dev',name))
+                    word_number=len(f)
+                    j=0
+                    temp=[]
+                    while j<word_number:
+                        if j+bert_len<word_number:
+                            temp.append([
+                                j,j+bert_len,
+                                os.path.join('V2/word_level/dev',name)
+                            ])
+                        else:
+                            temp.append(
+                                [
+                                    j,word_number,os.path.join('V2/word_level/dev',name)
+                                ]
+                            )
+                        j+=bert_len
+                    dev+=temp
+                for name in tqdm.tqdm(os.listdir('V2/word_level/test'),total=len(os.listdir('V2/word_level/test'))):
+                    f=np.load(os.path.join('V2/word_level/test',name))
+                    word_number=len(f)
+                    j=0
+                    temp=[]
+                    while j<word_number:
+                        if j+bert_len<word_number:
+                            temp.append(
+                                [j,j+bert_len,os.path.join('V2/word_level/test',name)]
+                            )
+                        else:
+                            temp.append(
+                                [j,word_number,os.path.join('V2/word_level/test',name)]
+                            )
+                        j+=bert_len
+                    test+=temp
+                return samples,token,dev,test
 
     def char2word(self,article_path,label_dir=None):
         """
@@ -238,35 +307,62 @@ class Dataloader(object):
         """
         index=self.train_index if is_train else self.val_index
         start=0
-        while True:
-            inputs=np.zeros(shape=(self.batch_size,self.fixed_length))
-            labels=np.zeros(shape=(self.batch_size,self.fixed_length,1))
-            if start+self.batch_size<len(index):
-                batch_index=index[start:start+self.batch_size]
-            else:
-                batch_index=np.hstack((index[start:],index[:(start+self.batch_size)%len(index)]))
-            np.random.shuffle(batch_index)
-            for c,i in enumerate(batch_index):
-                f_i,f_j,path,label_path=self.mask[i]
-                file=open(path,'r',encoding='utf-8').read()[f_i:f_j]
-                text2id=np.array(self.token.texts_to_sequences(file))
-                text2id=np.squeeze(text2id,axis=-1)
-                if len(text2id)==self.fixed_length:
-                    inputs[c,:]=text2id
+        if self.word_level==False:
+            while True:
+                inputs=np.zeros(shape=(self.batch_size,self.fixed_length))
+                labels=np.zeros(shape=(self.batch_size,self.fixed_length,1))
+                if start+self.batch_size<len(index):
+                    batch_index=index[start:start+self.batch_size]
                 else:
-                    inputs[c,:len(text2id)]=text2id
-                for line in open(label_path,'r',encoding='utf-8').readlines():
-                    _,s,e=line.strip('\n').split('\t')
-                    if int(s)>=f_i and int(e)<=f_j:
-                        labels[c,(int(s)-f_i):(int(e)-f_i),0]=1
-                    elif int(s)>=f_i and int(e)>f_j:
-                        labels[c,(int(s)-f_i):,0]=1
-                    elif int(s)<f_i and int(e)<=f_j:
-                        labels[c,:(int(e)-f_i),0]=1
+                    batch_index=np.hstack((index[start:],index[:(start+self.batch_size)%len(index)]))
+                np.random.shuffle(batch_index)
+                for c,i in enumerate(batch_index):
+                    f_i,f_j,path,label_path=self.mask[i]
+                    file=open(path,'r',encoding='utf-8').read()[f_i:f_j]
+                    text2id=np.array(self.token.texts_to_sequences(file))
+                    text2id=np.squeeze(text2id,axis=-1)
+                    if len(text2id)==self.fixed_length:
+                        inputs[c,:]=text2id
                     else:
-                        labels[c,:,0]=1
-            yield inputs,labels
-            start=(start+self.batch_size)%len(index)
+                        inputs[c,:len(text2id)]=text2id
+                    for line in open(label_path,'r',encoding='utf-8').readlines():
+                        _,s,e=line.strip('\n').split('\t')
+                        if int(s)>=f_i and int(e)<=f_j:
+                            labels[c,(int(s)-f_i):(int(e)-f_i),0]=1
+                        elif int(s)>=f_i and int(e)>f_j:
+                            labels[c,(int(s)-f_i):,0]=1
+                        elif int(s)<f_i and int(e)<=f_j:
+                            labels[c,:(int(e)-f_i),0]=1
+                        else:
+                            labels[c,:,0]=1
+                yield inputs,labels
+                start=(start+self.batch_size)%len(index)
+        else:
+            if self.fixed_length:
+                while True:
+                    inputs=np.zeros(shape=(self.batch_size,self.fixed_length))
+                    labels=np.zeros(shape=(self.batch_size,self.fixed_length,1))
+                    if start+self.batch_size<len(index):
+                        batch_index=index[start:start+self.batch_size]
+                    else:
+                        batch_index=np.hstack((index[start:],index[:(start+self.batch_size)%len(index)]))
+                    np.random.shuffle(batch_index)
+                    for c,i in enumerate(batch_index):
+                        word_i,word_j,path,label_path=self.mask[i]
+                        words=np.load(path)[word_i:word_j,0]
+                        label=np.load(label_path)[word_i:word_j]
+                        words2id=np.array(self.token.texts_to_sequences(words))
+                        words2id=np.squeeze(words2id,axis=-1)
+                        if len(words2id)!=len(label):
+                            raise ValueError('词和标签数量不同')
+                        if len(words2id)==self.fixed_length:
+                            inputs[c,:]=words2id
+                            labels[c,:,:]=np.expand_dims(label,axis=-1)
+                        else:
+                            inputs[c,:len(words2id)]=words2id
+                            labels[c,:len(words2id),:]=np.expand_dims(label,axis=-1)
+                    yield inputs,labels
+                    start=(start+self.batch_size)%len(index)
 
 class SemEval(object):
     def __init__(self,train_dir=train_dir,label_dir=label_dir,
@@ -399,7 +495,8 @@ class SemEval(object):
         helper_char_level('test')
 
 if __name__=='__main__':
-    # d=Dataloader()
-    # d.char2word(train_dir,label_dir)
-    app=SemEval(batch_size=32,word_level=False)
-    app.predict('saved_models/lstm_Char-level_Fixed-length-512_No-embedding_val_acc_2.h5')
+    # d=Dataloader(word_level=True,fixed_length=512)
+    # d.generator().__next__()
+    # d.generator().__next__()
+    app=SemEval(batch_size=32,word_level=True,fixed_length=512,split_rate=0.1)
+    app.train(model_name='lstm',embedding_name=None,layer_number=2)
