@@ -1,8 +1,8 @@
 import os,tqdm,numpy as np
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import tensorflow as tf
-from tensorflow.keras.optimizers import Adam,SGD
-from tensorflow.contrib.opt import LazyAdamOptimizer
+from tensorflow.keras.optimizers import Adam,SGD,RMSprop
+from keras_radam import RAdam
 from tensorflow.keras.backend import set_session
 config = tf.ConfigProto()
 config.gpu_options.per_process_gpu_memory_fraction = 0.5
@@ -12,7 +12,7 @@ from tensorflow.keras.models import load_model
 from models.Models import CustomModels
 from collections import defaultdict
 import json,string
-from models.CRF import f1
+from models.CRF import f1,LazyOptimizer
 from zhon.hanzi import punctuation as p1
 from zhon.pinyin import punctuation as p2
 train_dir='V2/datasets/train-articles'
@@ -415,12 +415,15 @@ class SemEval(object):
         word_str='Word-level' if self.word_level else 'Char-level'
         sentence='Var-length' if self.fixed_length is None else 'Fixed-length-{}'.format(self.fixed_length)
         model_save_file='_'.join([model_name,word_str,op_setting,sentence,emb_str,monitor,str(layer_number)])+'.h5'
-        model,loss,metrics=CustomModels(model_name=model_name,vocab_size=len(self.dataloader.token.word_index)+1,
+        model,loss,metrics,embed_layer=CustomModels(model_name=model_name,vocab_size=len(self.dataloader.token.word_index)+1,
                            embedding_name=embedding_name,layer_number=layer_number).build_model()
         op_dict={
             'adam':Adam(lr),
-            'lazyadam':LazyAdamOptimizer(lr),
-            'sgd':SGD(lr)
+            'radam':RAdam(lr),
+            'rms':RMSprop(lr),
+            'sgd':SGD(lr),
+            'lazyadam':LazyOptimizer(Adam(lr),[embed_layer]),
+            'lazyrms':LazyOptimizer(RMSprop(lr),[embed_layer])
         }
         op=op_dict[op_setting.lower()]
         model.compile(optimizer=op,loss=loss,metrics=metrics+[f1])
@@ -456,7 +459,7 @@ class SemEval(object):
         if direct_load==False:
             e_n=model_name.split('_')[-4] if model_name.split('_')[-4]!='No-embedding' else None
             layer=int(model_name.split('_')[-1])
-            model,loss,metrics=CustomModels(model_name=model_name.split('_')[0],
+            model,loss,metrics,embedding_layer=CustomModels(model_name=model_name.split('_')[0],
                                             vocab_size=len(self.dataloader.token.word_index)+1,
                                             embedding_name=e_n,layer_number=layer).build_model()
             model.load_weights(model_path)
@@ -508,4 +511,7 @@ class SemEval(object):
 
 if __name__=='__main__':
     app=SemEval(batch_size=32,word_level=True,fixed_length=512,split_rate=0.1)
-    app.train(model_name='lstm',embedding_name=None,layer_number=2)
+    app.train(model_name='lstm',embedding_name=None,monitor='val_loss',layer_number=2,
+              op_setting='lazyadam',lr=0.001)
+
+

@@ -10,26 +10,28 @@ class CustomModels(object):
     def build_model(self):
         if self.embedding_name is None:
             Input_layer=Input(shape=(None,),name='Input_layer')
-            x=Embedding(self.vocab_size,100)(Input_layer)
+            embedd_layer=Embedding(self.vocab_size,100)
+            x=embedd_layer(Input_layer)
             if self.model_name.lower()=='lstm':
+                x=Dropout(0.4,name='lstm_dropout')(x)
                 for i in range(self.layer_number):
                     x=Bidirectional(LSTM(128,return_sequences=True),merge_mode='concat',name='bilstm_{}'.format(i))(x)
-                x=Dropout(0.4,name='lstm_dropout')(x)
                 x=TimeDistributed(Dense(1),name='Time_Dense')(x)
                 x=Activation('sigmoid')(x)
                 model=Model(Input_layer,x)
                 model.summary()
-                return model,'binary_crossentropy',['acc']
+                return model,'binary_crossentropy',['acc'],embedd_layer
             elif self.model_name.lower()=='gru':
+                x=Dropout(0.4,name='gru_dropout')(x)
                 for i in range(self.layer_number):
                     x=Bidirectional(GRU(128,return_sequences=True),merge_mode='concat',name='bigru_{}'.format(i))(x)
-                x=Dropout(0.4,name='lstm_dropout')(x)
                 x=TimeDistributed(Dense(1),name='Time_Dense')(x)
                 x=Activation('sigmoid')(x)
                 model=Model(Input_layer,x)
                 model.summary()
-                return model,'binary_crossentropy',['acc']
+                return model,'binary_crossentropy',['acc'],embedd_layer
             elif self.model_name.lower()=='lstm-crf':
+                x=Dropout(0.4,name='lstm_dropout')(x)
                 for i in range(self.layer_number):
                     x=Bidirectional(LSTM(128,return_sequences=True),merge_mode='concat',name='bilstm_{}'.format(i))(x)
                 x=Dense(64,activation='tanh',name='dense_layer')(x)
@@ -38,8 +40,9 @@ class CustomModels(object):
                 x=crf_layer(x)
                 model=Model(Input_layer,x)
                 model.summary()
-                return model,crf_layer.loss,[crf_layer.viterbi_accuracy]
+                return model,crf_layer.loss,[crf_layer.viterbi_accuracy],embedd_layer
             else:
+                x=Dropout(0.4,name='gru_dropout')(x)
                 for i in range(self.layer_number):
                     x=Bidirectional(GRU(128,return_sequences=True),merge_mode='concat',name='bigru_{}'.format(i))(x)
                 x=Dense(64,activation='tanh',name='dense_layer')(x)
@@ -48,7 +51,7 @@ class CustomModels(object):
                 x=crf_layer(x)
                 model=Model(Input_layer,x)
                 model.summary()
-                return model,crf_layer.loss,[crf_layer.viterbi_accuracy]
+                return model,crf_layer.loss,[crf_layer.viterbi_accuracy],embedd_layer
 
 if __name__=='__main__':
     m=CustomModels(model_name='lstm-crf',vocab_size=147,embedding_name=None)
