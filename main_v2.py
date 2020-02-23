@@ -2,11 +2,13 @@ import os,tqdm,numpy as np
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam,SGD
+from tensorflow.contrib.opt import LazyAdamOptimizer
 from tensorflow.keras.backend import set_session
 config = tf.ConfigProto()
 config.gpu_options.per_process_gpu_memory_fraction = 0.5
 set_session(tf.Session(config=config))
 from keras.preprocessing.text import Tokenizer
+from tensorflow.keras.models import load_model
 from models.Models import CustomModels
 from collections import defaultdict
 import json,string
@@ -412,10 +414,15 @@ class SemEval(object):
         emb_str= 'No-embedding' if embedding_name is None else embedding_name
         word_str='Word-level' if self.word_level else 'Char-level'
         sentence='Var-length' if self.fixed_length is None else 'Fixed-length-{}'.format(self.fixed_length)
-        model_save_file='_'.join([model_name,word_str,sentence,emb_str,monitor,str(layer_number)])+'.h5'
+        model_save_file='_'.join([model_name,word_str,op_setting,sentence,emb_str,monitor,str(layer_number)])+'.h5'
         model,loss,metrics=CustomModels(model_name=model_name,vocab_size=len(self.dataloader.token.word_index)+1,
                            embedding_name=embedding_name,layer_number=layer_number).build_model()
-        op=Adam(lr) if op_setting.lower()=='adam' else SGD(lr)
+        op_dict={
+            'adam':Adam(lr),
+            'lazyadam':LazyAdamOptimizer(lr),
+            'sgd':SGD(lr)
+        }
+        op=op_dict[op_setting.lower()]
         model.compile(optimizer=op,loss=loss,metrics=metrics+[f1])
         modes={
             'val_acc':'max',
@@ -443,13 +450,18 @@ class SemEval(object):
         :param model_path:
         :return:
         """
+
         model_name=model_path.split('/')[-1].strip('.h5')
-        e_n=model_name.split('_')[-4] if model_name.split('_')[-4]!='No-embedding' else None
-        layer=int(model_name.split('_')[-1])
-        model,loss,metrics=CustomModels(model_name=model_name.split('_')[0],
-                           vocab_size=len(self.dataloader.token.word_index)+1,
-                           embedding_name=e_n,layer_number=layer).build_model()
-        model.load_weights(model_path)
+        direct_load=True if model_name.split('_')[0].endswith('crf')==False else False
+        if direct_load==False:
+            e_n=model_name.split('_')[-4] if model_name.split('_')[-4]!='No-embedding' else None
+            layer=int(model_name.split('_')[-1])
+            model,loss,metrics=CustomModels(model_name=model_name.split('_')[0],
+                                            vocab_size=len(self.dataloader.token.word_index)+1,
+                                            embedding_name=e_n,layer_number=layer).build_model()
+            model.load_weights(model_path)
+        else:
+            model=load_model(model_path,compile=False)
         print('vocab size:{}'.format(len(self.dataloader.token.word_index)))
         def helper_char_level(data:str):
             """
