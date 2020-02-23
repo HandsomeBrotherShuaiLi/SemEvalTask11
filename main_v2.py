@@ -1,13 +1,14 @@
 import os,tqdm,numpy as np
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import tensorflow as tf
 from tensorflow.keras.backend import set_session
 config = tf.ConfigProto()
-config.gpu_options.per_process_gpu_memory_fraction = 0.6
+config.gpu_options.per_process_gpu_memory_fraction = 0.5
 set_session(tf.Session(config=config))
 from keras.preprocessing.text import Tokenizer
 from models.Models import CustomModels
 from word_level import f1
+from collections import defaultdict
 import json
 train_dir='V2/datasets/train-articles'
 dev_dir='V2/datasets/dev-articles'
@@ -54,15 +55,15 @@ class Dataloader(object):
         self.batch_size=batch_size
         self.fixed_length=fixed_length
         self.word_level=word_level
-        self.mask,self.token=self.init_mask(self.fixed_length,self.word_level)
+        self.mask,self.token,self.dev,self.test=self.init_mask(self.fixed_length,self.word_level)
         all_index=np.array(range(len(self.mask)))
         val_num=int(self.split_rate*len(self.mask))
         self.val_index=np.random.choice(all_index,size=val_num,replace=False)
         self.train_index=np.array([i for i in all_index if i not in self.val_index])
         self.train_steps=len(self.train_index)//self.batch_size
         self.val_steps=len(self.val_index)//self.batch_size
-        print('vocab number:{}\ntrain number:{}\nval number:{}'.format(len(self.token.word_index),len(self.train_index),
-                                                                       len(self.val_index)))
+        print('vocab number:{}\ntrain number:{}\nval number:{}\ndev number:{}\ntest number:{}'.format(len(self.token.word_index),len(self.train_index),
+                                                                       len(self.val_index),len(self.dev),len(self.test)))
 
     def init_mask(self,bert_len=512,word_level=False):
         if word_level==False:
@@ -82,13 +83,35 @@ class Dataloader(object):
                         temp.append([j,f_len,path,label_path])
                     j=j+bert_len
                 mask+=temp
+            dev=[]
             for name in os.listdir(self.dev_dir):
-                vac.append(open(os.path.join(self.dev_dir,name),'r',encoding='utf-8').read())
+                f=open(os.path.join(self.dev_dir,name),'r',encoding='utf-8').read()
+                vac.append(f)
+                temp=[]
+                j=0
+                while j<len(f):
+                    if j+bert_len<len(f):
+                        temp.append([j,j+bert_len,os.path.join(self.dev_dir,name)])
+                    else:
+                        temp.append([j,len(f),os.path.join(self.dev_dir,name)])
+                    j+=bert_len
+                dev+=temp
+            test=[]
             for name in os.listdir(self.test_dir):
-                vac.append(open(os.path.join(self.test_dir,name),'r',encoding='utf-8').read())
+                f=open(os.path.join(self.test_dir,name),'r',encoding='utf-8').read()
+                vac.append(f)
+                temp=[]
+                j=0
+                while j<len(f):
+                    if j+bert_len<len(f):
+                        temp.append([j,j+bert_len,os.path.join(self.test_dir,name)])
+                    else:
+                        temp.append([j,len(f),os.path.join(self.test_dir,name)])
+                    j+=bert_len
+                test+=temp
             token=Tokenizer(char_level=True,lower=False)
             token.fit_on_texts(vac)
-            return mask,token
+            return mask,token,dev,test
     def get_data(self,word_level=False,sentence_length=None):
         if word_level==False:
             #char 级别的处理
@@ -187,17 +210,17 @@ class SemEval(object):
                                    batch_size=self.batch_size,split_rate=self.split_rate,
                                    word_level=self.word_level,fixed_length=self.fixed_length)
 
-    def train(self,model_name,embedding_name=None):
+    def train(self,model_name,embedding_name=None,monitor='val_f1'):
         if not os.path.exists('saved_models'):
             os.mkdir('saved_models')
         emb_str= 'No-embedding' if embedding_name is None else embedding_name
         word_str='Word-level' if self.word_level else 'Char-level'
         sentence='Var-length' if self.fixed_length is None else 'Fixed-length-{}'.format(self.fixed_length)
-        model_save_file='_'.join([model_name,word_str,sentence,emb_str])+'.h5'
+        model_save_file='_'.join([model_name,word_str,sentence,emb_str,monitor])+'.h5'
         model,loss,metrics=CustomModels(model_name=model_name,vocab_size=len(self.dataloader.token.word_index),
                            embedding_name=embedding_name).build_model()
         model.compile(optimizer='adam',loss=loss,metrics=metrics+[f1])
-        his=model.fit_generator(
+        model.fit_generator(
             generator=self.dataloader.generator(is_train=True),
             steps_per_epoch=self.dataloader.train_steps,
             validation_data=self.dataloader.generator(is_train=False),
@@ -205,15 +228,54 @@ class SemEval(object):
             verbose=1,initial_epoch=0,epochs=200,
             callbacks=[
                 tf.keras.callbacks.ModelCheckpoint(os.path.join('saved_models',model_save_file),
-                                                   monitor='val_f1',verbose=1,save_best_only=True,
+                                                   monitor=monitor,verbose=1,save_best_only=True,
                                                    save_weights_only=False,mode='max'),
                 tf.keras.callbacks.TensorBoard('logs'),
-                tf.keras.callbacks.EarlyStopping(monitor='val_f1',patience=40,verbose=1,mode='max'),
-                tf.keras.callbacks.ReduceLROnPlateau(monitor='val_f1',patience=6,verbose=1,mode='max')
+                tf.keras.callbacks.EarlyStopping(monitor=monitor,patience=40,verbose=1,mode='max'),
+                tf.keras.callbacks.ReduceLROnPlateau(monitor=monitor,patience=6,verbose=1,mode='max')
             ]
         )
-        json.dump(his.history,open('saved_models/{}.json'.format(model_save_file.strip('.h5')),'w',encoding='utf-8'))
+    def predict(self,model_path):
+        model=tf.keras.models.load_model(model_path,compile=False)
+        model_name=model_path.split('/')[-1].strip('.h5')
+        def helper(data:str):
+            print('start to predict {} dataset...'.format(data))
+            result=defaultdict(list)
+            dataset={
+                'dev':self.dataloader.dev,
+                'test':self.dataloader.test
+            }
+            for line in tqdm.tqdm(dataset[data],total=len(dataset[data])):
+                i,j,path=line
+                f=open(path,'r',encoding='utf-8').read()[i:j]
+                seg=np.array(self.dataloader.token.texts_to_sequences(f))
+                seg=np.squeeze(seg,axis=-1)
+                seg=np.expand_dims(seg,axis=0)
+                pred=np.squeeze(model.predict(seg)[0],axis=-1)
+                pro_index=np.where(pred>=0.5)
+                result[path]+=np.array(pro_index[0]+i).tolist()
+            json.dump(result,open('results/{}.json'.format(model_name),'w',encoding='utf-8'))
+            sub=open('results/{}.txt'.format(model_name),'w',encoding='utf-8')
+            for path in tqdm.tqdm(result,total=len(result)):
+                all_index=result[path]
+                id=path.split('/')[-1].strip('.txt').strip('article')
+                if len(all_index)==0:
+                    pass
+                elif len(all_index)==1:
+                    sub.write('{}\t{}\t{}\n'.format(id,all_index[0],all_index[0]))
+                else:
+                    start=all_index[0]
+                    for c in range(1,len(all_index)):
+                        if all_index[c]==all_index[c-1]+1:
+                            pass
+                        else:
+                            end=all_index[c-1]+1
+                            sub.write('{}\t{}\t{}\n'.format(id,start,end))
+                            start=all_index[c]
+            sub.close()
+        helper('dev')
+        helper('test')
 
 if __name__=='__main__':
     app=SemEval(batch_size=16,word_level=False)
-    app.train(model_name='lstm')
+    app.predict(model_path='saved_models/lstm_Char-level_Fixed-length-512_No-embedding.h5')
