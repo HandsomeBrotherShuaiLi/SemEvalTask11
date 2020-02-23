@@ -240,7 +240,7 @@ class SemEval(object):
         )
     def predict(self,model_path):
         model_name=model_path.split('/')[-1].strip('.h5')
-        e_n=model_name.split('_')[-3] if model_name.split('_')[-3]!='No-embedding' else None
+        e_n=model_name.split('_')[-4] if model_name.split('_')[-4]!='No-embedding' else None
         layer=int(model_name.split('_')[-1])
         model,loss,metrics=CustomModels(model_name=model_name.split('_')[0],
                            vocab_size=len(self.dataloader.token.word_index)+1,
