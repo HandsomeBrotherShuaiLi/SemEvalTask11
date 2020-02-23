@@ -8,44 +8,67 @@ config.gpu_options.per_process_gpu_memory_fraction = 0.5
 set_session(tf.Session(config=config))
 from keras.preprocessing.text import Tokenizer
 from models.Models import CustomModels
-from word_level import f1
 from collections import defaultdict
-import json
+import json,string
+import tensorflow.keras.backend as K
+from zhon.hanzi import punctuation as p1
+from zhon.pinyin import punctuation as p2
 train_dir='V2/datasets/train-articles'
 dev_dir='V2/datasets/dev-articles'
 test_dir='V2/test-articles'
 label_dir='V2/datasets/train-labels-task1-span-identification'
 """
-思路：先给原文本做字符级别的mask,再用bert训练，再训练的时候，考虑采用裁断512的方法
+思路：
+1. 字符级的BiLSTM
+2. 词级别的BiLSTM
+3. 词的embedding + BiLSTM
+4  字符+词（embedding)+BiLSTM
 """
-def test_for_article():
-    name=os.listdir(train_dir)
-    print(len(name),len(os.listdir(label_dir)))
-    sl=0
-    for i in name:
-        path=os.path.join(train_dir,i)
-        f=open(path,'r',encoding='utf-8').read()
-        label=open(os.path.join(label_dir,i.replace('.txt','.task1-SI.labels'))).readlines()
-        print(i,len(f))
-        if len(f)>sl:sl=len(f)
-        for line in label:
-            _,s,e=line.strip('\n').split('\t')
-            print(f[int(s):int(e)])
-        print('*'*100)
-    print(sl)
+def f1(y_true, y_pred):
+    def recall(y_true, y_pred):
+        """Recall metric.
+
+        Only computes a batch-wise average of recall.
+
+        Computes the recall, a metric for multi-label classification of
+        how many relevant items are selected.
+        """
+        true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+        possible_positives = K.sum(K.round(K.clip(y_true, 0, 1)))
+        recall = true_positives / (possible_positives + K.epsilon())
+        return recall
+
+    def precision(y_true, y_pred):
+        """Precision metric.
+
+        Only computes a batch-wise average of precision.
+
+        Computes the precision, a metric for multi-label classification of
+        how many selected items are relevant.
+        """
+        true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+        predicted_positives = K.sum(K.round(K.clip(y_pred, 0, 1)))
+        precision = true_positives / (predicted_positives + K.epsilon())
+        return precision
+    precision = precision(y_true, y_pred)
+    recall = recall(y_true, y_pred)
+    return 2*((precision*recall)/(precision+recall+K.epsilon()))
 
 class Dataloader(object):
     def __init__(self,train_dir=train_dir,label_dir=label_dir,
                  test_dir=test_dir,dev_dir=dev_dir,split_rate=0.2,batch_size=8,
-                 fixed_length=512,word_level=False):
+                 fixed_length=512,word_level=False,mixed=False):
         """
-        字符级别的数据读取器
+
         :param train_dir:
         :param label_dir:
         :param test_dir:
         :param dev_dir:
         :param split_rate:
         :param batch_size:
+        :param fixed_length:
+        :param word_level:
+        :param mixed:
         """
 
         self.train_dir=train_dir
@@ -56,6 +79,7 @@ class Dataloader(object):
         self.batch_size=batch_size
         self.fixed_length=fixed_length
         self.word_level=word_level
+        self.mixed=mixed
         self.mask,self.token,self.dev,self.test=self.init_mask(self.fixed_length,self.word_level)
         all_index=np.array(range(len(self.mask)))
         val_num=int(self.split_rate*len(self.mask))
@@ -67,6 +91,12 @@ class Dataloader(object):
                                                                        len(self.val_index),len(self.dev),len(self.test)))
 
     def init_mask(self,bert_len=512,word_level=False):
+        """
+
+        :param bert_len:
+        :param word_level:
+        :return:
+        """
         if word_level==False:
             mask=[]
             vac=[]
@@ -113,7 +143,75 @@ class Dataloader(object):
             token=Tokenizer(char_level=True,lower=False)
             token.fit_on_texts(vac)
             return mask,token,dev,test
+        else:
+            if not os.path.exists('V2/word_level'):
+                os.mkdir('V2/word_level')
+                os.mkdir('V2/word_level/train_articles')
+                os.mkdir('V2/word_level/train_labels')
+                os.mkdir('V2/word_level/dev')
+                os.mkdir('V2/word_level/test')
+            sentences=[]
+            sentences+=self.char2word(self.train_dir,self.label_dir)
+            sentences+=self.char2word(self.test_dir)
+            sentences+=self.char2word(self.dev_dir)
+            token=Tokenizer(char_level=False,lower=False)
+            token.fit_on_texts(sentences)
+            if bert_len is None:pass
+            else:pass
+
+    def char2word(self,article_path,label_dir=None):
+        """
+
+        :param article_path:
+        :param label_dir:
+        :return:
+        """
+        mapping={
+            'train-articles':'V2/word_level/train_articles',
+            'dev-articles':'V2/word_level/dev',
+            'test-articles':'V2/word_level/test',
+            'train-labels-task1-span-identification':'V2/word_level/train_labels'
+        }
+        sentences=[]
+        for name in tqdm.tqdm(os.listdir(article_path),total=len(os.listdir(article_path))):
+            path=os.path.join(article_path,name)
+            if label_dir:
+                label_path=os.path.join(label_dir,name.replace('.txt','.task1-SI.labels'))
+                label=open(label_path,'r',encoding='utf-8').readlines()
+                mask=[]
+            f=open(path,'r',encoding='utf-8').read()
+            word_index=[]
+            p3=string.punctuation
+            temp=str()
+            for i,char in enumerate(f):
+                if char not in [' ','\n','\t',''] and char not in p1 and char not in p2 and char not in p3:
+                    temp+=char
+                else:
+                    if len(temp)>=1:
+                        word_index.append([temp,i-len(temp),i])
+                        sentences.append(temp)
+                        if label_dir is not None:
+                            flag=0
+                            for line in label:
+                                _,s,e=line.strip('\n').split('\t')
+                                if i-len(temp)>=int(s)-1 and i<=int(e)+1:
+                                    flag=1
+                                    break
+                            mask.append(flag)
+                    temp=str()
+            word_index=np.array(word_index)
+            np.save(os.path.join(mapping[article_path.split('/')[-1]],name.replace('.txt','.npy')),word_index)
+            if label_dir:
+                np.save(os.path.join(mapping[label_dir.split('/')[-1]],name.replace('.txt','.npy')),np.array(mask))
+        return sentences
+
     def get_data(self,word_level=False,sentence_length=None):
+        """
+
+        :param word_level:
+        :param sentence_length:
+        :return:
+        """
         if word_level==False:
             #char 级别的处理
             if sentence_length is None:
@@ -162,6 +260,11 @@ class Dataloader(object):
                 return train_x,train_y,val_x,val_y,test_x,dev_x,set(ls)
 
     def generator(self,is_train=True):
+        """
+
+        :param is_train:
+        :return:
+        """
         index=self.train_index if is_train else self.val_index
         start=0
         while True:
@@ -197,7 +300,19 @@ class Dataloader(object):
 class SemEval(object):
     def __init__(self,train_dir=train_dir,label_dir=label_dir,
                  test_dir=test_dir,dev_dir=dev_dir,batch_size=8,split_rate=0.1,
-                 word_level=False,fixed_length=512):
+                 word_level=False,fixed_length=512,mixed=False):
+        """
+
+        :param train_dir:
+        :param label_dir:
+        :param test_dir:
+        :param dev_dir:
+        :param batch_size:
+        :param split_rate:
+        :param word_level:
+        :param fixed_length:
+        :param mixed:
+        """
         self.train_dir=train_dir
         self.label_dir=label_dir
         self.test_dir=test_dir
@@ -206,13 +321,25 @@ class SemEval(object):
         self.split_rate=split_rate
         self.word_level=word_level
         self.fixed_length=fixed_length
+        self.mixed=mixed
         self.dataloader=Dataloader(train_dir=self.train_dir,label_dir=self.label_dir,
                                    test_dir=self.test_dir,dev_dir=self.dev_dir,
                                    batch_size=self.batch_size,split_rate=self.split_rate,
-                                   word_level=self.word_level,fixed_length=self.fixed_length)
+                                   word_level=self.word_level,fixed_length=self.fixed_length,
+                                   mixed=self.mixed)
 
     def train(self,model_name,embedding_name=None,monitor='val_acc',layer_number=2,lr=0.001,
               op_setting='adam'):
+        """
+
+        :param model_name:
+        :param embedding_name:
+        :param monitor:
+        :param layer_number:
+        :param lr:
+        :param op_setting:
+        :return:
+        """
         if not os.path.exists('saved_models'):
             os.mkdir('saved_models')
         emb_str= 'No-embedding' if embedding_name is None else embedding_name
@@ -223,6 +350,11 @@ class SemEval(object):
                            embedding_name=embedding_name,layer_number=layer_number).build_model()
         op=Adam(lr) if op_setting.lower()=='adam' else SGD(lr)
         model.compile(optimizer=op,loss=loss,metrics=metrics+[f1])
+        modes={
+            'val_acc':'max',
+            'val_loss':'min',
+            'val_f1':'max'
+        }
         model.fit_generator(
             generator=self.dataloader.generator(is_train=True),
             steps_per_epoch=self.dataloader.train_steps,
@@ -232,13 +364,18 @@ class SemEval(object):
             callbacks=[
                 tf.keras.callbacks.ModelCheckpoint(os.path.join('saved_models',model_save_file),
                                                    monitor=monitor,verbose=1,save_best_only=True,
-                                                   save_weights_only=False,mode='max'),
+                                                   save_weights_only=False,mode=modes[monitor]),
                 tf.keras.callbacks.TensorBoard('logs'),
-                tf.keras.callbacks.EarlyStopping(monitor=monitor,patience=40,verbose=1,mode='max'),
-                tf.keras.callbacks.ReduceLROnPlateau(monitor=monitor,patience=6,verbose=1,mode='max')
+                tf.keras.callbacks.EarlyStopping(monitor=monitor,patience=40,verbose=1,mode=modes[monitor]),
+                tf.keras.callbacks.ReduceLROnPlateau(monitor=monitor,patience=6,verbose=1,mode=modes[monitor])
             ]
         )
     def predict(self,model_path):
+        """
+
+        :param model_path:
+        :return:
+        """
         model_name=model_path.split('/')[-1].strip('.h5')
         e_n=model_name.split('_')[-4] if model_name.split('_')[-4]!='No-embedding' else None
         layer=int(model_name.split('_')[-1])
@@ -247,7 +384,12 @@ class SemEval(object):
                            embedding_name=e_n,layer_number=layer).build_model()
         model.load_weights(model_path)
         print('vocab size:{}'.format(len(self.dataloader.token.word_index)))
-        def helper(data:str):
+        def helper_char_level(data:str):
+            """
+
+            :param data:
+            :return:
+            """
             result=defaultdict(list)
             dataset={
                 'dev':self.dataloader.dev,
@@ -271,7 +413,7 @@ class SemEval(object):
                 if len(all_index)==0:
                     pass
                 elif len(all_index)==1:
-                    sub.write('{}\t{}\t{}\n'.format(id,all_index[0],all_index[0]))
+                    sub.write('{}\t{}\t{}\n'.format(id,all_index[0],all_index[0]+1))
                 else:
                     start=all_index[0]
                     for c in range(1,len(all_index)):
@@ -282,9 +424,11 @@ class SemEval(object):
                             sub.write('{}\t{}\t{}\n'.format(id,start,end))
                             start=all_index[c]
             sub.close()
-        helper('dev')
-        helper('test')
+        helper_char_level('dev')
+        helper_char_level('test')
 
 if __name__=='__main__':
+    # d=Dataloader()
+    # d.char2word(train_dir,label_dir)
     app=SemEval(batch_size=32,word_level=False)
-    app.train(model_name='lstm',embedding_name=None,monitor='val_acc')
+    app.predict('saved_models/lstm_Char-level_Fixed-length-512_No-embedding_val_acc_2.h5')
