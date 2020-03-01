@@ -1,5 +1,5 @@
 import os,tqdm,numpy as np
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import tensorflow
 import codecs
 from keras_radam import RAdam
@@ -65,7 +65,8 @@ class Dataloader(object):
         self.train_index=np.array([i for i in all_index if i not in self.val_index])
         self.train_steps=len(self.train_index)//self.batch_size
         self.val_steps=len(self.val_index)//self.batch_size
-        print('vocab number:{}\ntrain number:{}\nval number:{}\ndev number:{}\ntest number:{}'.format(len(self.token.word_index),len(self.train_index),
+        vocab_len=len(self.token.word_index) if self.embedding is None else len(self.token)
+        print('vocab number:{}\ntrain number:{}\nval number:{}\ndev number:{}\ntest number:{}'.format(vocab_len,len(self.train_index),
                                                                        len(self.val_index),len(self.dev),len(self.test)))
 
     def download(self,kind,dir='pretrained_embedding'):
@@ -74,9 +75,11 @@ class Dataloader(object):
             os.mkdir(dir)
         fname=url.split('/')[-1].strip('.zip')
         p=os.getcwd()
-        os.system('wget -P {} {}'.format(os.path.join(p,dir),url))
-        os.system('unzip -d {} {}'.format(os.path.join(p,dir),os.path.join(p,dir,url.split('/')[-1])))
-        os.system('rm {}'.format(os.path.join(p,dir,url.split('/')[-1])))
+        # print('start to wget......')
+        # os.system('wget -P {} {}'.format(os.path.join(p,dir),url))
+        # print('start to unzip......')
+        # os.system('unzip -d {} {}'.format(os.path.join(p,dir),os.path.join(p,dir,url.split('/')[-1])))
+        # os.system('rm {}'.format(os.path.join(p,dir,url.split('/')[-1])))
         config_path=os.path.join(p,dir,fname,'bert_config.json')
         checkpoints_path=os.path.join(p,dir,fname,'bert_model.ckpt')
         vocab_path=os.path.join(p,dir,fname,'vocab.txt')
@@ -667,4 +670,4 @@ if __name__=='__main__':
     app=SemEval(
         split_rate=0.2,batch_size=16,word_level=True,embedding='bert',fixed_length=512
     )
-    app.train(model_name='lstm',monitor='f1',layer_number=2,op_setting='lazyadam')
+    app.train(model_name='lstm',monitor='f1',layer_number=2,op_setting='adam')
