@@ -2,6 +2,13 @@
 <project version="4">
   <component name="PublishConfigData" autoUpload="On explicit save action" autoUploadExternalChanges="true">
     <serverData>
+      <paths name="ld-shuai_li@localhost:6000">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/data/shuai_li/Eval" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="shopee_ktp_93">
         <serverdata>
           <mappings>
