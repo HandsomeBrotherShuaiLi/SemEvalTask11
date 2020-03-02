@@ -638,7 +638,7 @@ class SemEval(object):
                     pred=np.squeeze(model.predict(words)[0],axis=-1)
                     if model_name.split('_')[0].endswith('crf'):print(pred)
                     pro_index=np.where(pred>=0.5)
-                    result[line]+=pro_index[0].to_list()
+                    result[line]+=pro_index[0].tolist()
                 else:
                     words=' '.join(f[:,0])
                     ids,segments=bert_tokenizer.encode(words)
@@ -647,7 +647,7 @@ class SemEval(object):
                     pred=np.squeeze(model.predict([ids,segments])[0],axis=-1)
                     if model_name.split('_')[0].endswith('crf'):print(pred)
                     pro_index=np.where(pred>=0.5)
-                    result[line]+=pro_index[0].to_list()
+                    result[line]+=pro_index[0].tolist()
 
         else:
             for line in tqdm.tqdm(dataset[data],total=len(dataset[data])):
@@ -669,7 +669,7 @@ class SemEval(object):
                     pred=np.squeeze(model.predict([ids,segments])[0],axis=-1)
                     if model_name.split('_')[0].endswith('crf'):print(pred)
                     pro_index=np.where(pred>=0.5)
-                    result[line]+=pro_index[0].to_list()
+                    result[path]+=np.array(pro_index[0]+s).tolist()
         json.dump(result,open('results/{}_{}_{}.json'.format(data,model_name,gap),'w',encoding='utf-8'))
         sub=open('results/{}_{}_{}.txt'.format(data,model_name,gap),'w',encoding='utf-8')
         for path in tqdm.tqdm(result,total=len(result)):
@@ -686,16 +686,20 @@ class SemEval(object):
                     if word_index[c]-word_index[c-1]<=gap:
                         pass
                     else:
-                        end=word_start_end[word_index[c-1],2]
-                        sub.write('{}\t{}\t{}\n'.format(id,word_start_end[start,1],end))
-                        start=word_index[c]
-                sub.write('{}\t{}\t{}\n'.format(id,word_start_end[start,1],word_start_end[word_index[-1],2]))
+                        if word_index[c-1]<len(word_start_end):
+                            end=word_start_end[word_index[c-1],2]
+                            sub.write('{}\t{}\t{}\n'.format(id,word_start_end[start,1],end))
+                            start=word_index[c]
+                try:
+                    sub.write('{}\t{}\t{}\n'.format(id,word_start_end[start,1],word_start_end[word_index[-1],2]))
+                except:
+                    pass
         sub.close()
 if __name__=='__main__':
     app=SemEval(
         split_rate=0.2,batch_size=2,word_level=True,embedding='bert',fixed_length=512
     )
-    app.predict('saved_models/lstm_Word-level_adam_Fixed-length-512_freezed_bert_val_acc_2.h5')
+    #app.predict('saved_models/lstm_Word-level_adam_Fixed-length-512_freezed_bert_val_acc_2.h5')
     app.predict('saved_models/lstm_Word-level_adam_Fixed-length-512_freezed_bert_val_f1_2.h5')
     app.predict('saved_models/lstm_Word-level_adam_Fixed-length-512_trainable_bert_val_f1_2.h5')
     app.predict('saved_models/lstm_Word-level_adam_Fixed-length-512_trainable_bert_val_acc_2.h5')
