@@ -7,7 +7,7 @@ class CustomModels(object):
         self.vocab_size=vocab_size
         self.layer_number=layer_number
         self.paths=paths
-    def build_model(self):
+    def build_model(self,trainable=True):
         if self.embedding_name is None:
             from tensorflow.keras.layers import Input,Dense,LSTM,GRU,Bidirectional,Embedding,Dropout,TimeDistributed,Activation
             from tensorflow.keras import Model
@@ -62,10 +62,11 @@ class CustomModels(object):
             bert_model=load_trained_model_from_checkpoint(
                 config_file=config_path,
                 checkpoint_file=checkpoints_path,
-                training=False
+                training=trainable
             )
             inputs=bert_model.inputs[:2]
-            x = bert_model.layers[-1].output
+            x = bert_model.layers[-1].output if trainable==False else bert_model.get_layer(name='Encoder-24-FeedForward-Norm').output
+            x=Dropout(0.4)(x)
             if self.model_name.lower()=='lstm':
                 for i in range(self.layer_number):
                     x=Bidirectional(LSTM(128,return_sequences=True),merge_mode='concat',name='bilstm_{}'.format(i))(x)

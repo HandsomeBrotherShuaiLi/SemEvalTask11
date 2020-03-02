@@ -1,12 +1,14 @@
 import os,tqdm,numpy as np
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import tensorflow
+import tensorflow as tf
 import codecs
+from keras_bert import Tokenizer as Bert_Tokenizer
 from keras_radam import RAdam
-from tensorflow.keras.backend import set_session
-config = tensorflow.ConfigProto()
-config.gpu_options.per_process_gpu_memory_fraction = 0.5
-set_session(tensorflow.Session(config=config))
+# from tensorflow.keras.backend import set_session
+# config = tf.compat.v1.ConfigProto()
+# config.gpu_options.per_process_gpu_memory_fraction = 0.4
+# set_session(tensorflow.Session(config=config))
 from keras.preprocessing.text import Tokenizer
 from models.Models import CustomModels
 from collections import defaultdict
@@ -376,7 +378,7 @@ class Dataloader(object):
                 yield inputs,labels
                 start=(start+self.batch_size)%len(index)
         else:
-            if self.fixed_length:
+            if self.fixed_length and self.embedding is None:
                 while True:
                     inputs=np.zeros(shape=(self.batch_size,self.fixed_length))
                     labels=np.zeros(shape=(self.batch_size,self.fixed_length,1))
@@ -389,17 +391,8 @@ class Dataloader(object):
                         word_i,word_j,path,label_path=self.mask[i]
                         words=np.load(path)[word_i:word_j,0]
                         label=np.load(label_path)[word_i:word_j]
-                        if self.embedding is None:
-                            words2id=np.array(self.token.texts_to_sequences(words))
-                            words2id=np.squeeze(words2id,axis=-1)
-                        else:
-                            words2id=[]
-                            for word in words:
-                                try:
-                                    words2id.append(self.token[word])
-                                except:
-                                    words2id.append(self.token['[UNK]'])
-                            words2id=np.array(words2id)
+                        words2id=np.array(self.token.texts_to_sequences(words))
+                        words2id=np.squeeze(words2id,axis=-1)
                         if len(words2id)!=len(label):
                             raise ValueError('词和标签数量不同')
                         if len(words2id)==self.fixed_length:
@@ -410,6 +403,32 @@ class Dataloader(object):
                             labels[c,:len(words2id),:]=np.expand_dims(label,axis=-1)
                     yield inputs,labels
                     start=(start+self.batch_size)%len(index)
+            elif self.fixed_length and self.embedding is not None:
+                bert_tokenizer=Bert_Tokenizer(self.token)
+                while True:
+                    input_tokens=np.zeros(shape=(self.batch_size,self.fixed_length))
+                    input_segments=np.zeros(shape=(self.batch_size,self.fixed_length))
+                    input_labels=np.zeros(shape=(self.batch_size,self.fixed_length,1))
+                    if start+self.batch_size<len(index):
+                        batch_index=index[start:start+self.batch_size]
+                    else:
+                        batch_index=np.hstack((index[start:],index[:(start+self.batch_size)%len(index)]))
+                    np.random.shuffle(index)
+                    for c,i in enumerate(batch_index):
+                        word_i,word_j,path,label_path=self.mask[i]
+                        words=np.load(path)[word_i:word_j,0]
+                        words=' '.join(words)
+                        label=np.load(label_path)[word_i:word_j]
+                        ids,segments=bert_tokenizer.encode(words,max_len=self.fixed_length)
+                        input_tokens[c,:]=ids
+                        input_segments[c,:]=segments
+                        if len(label)==self.fixed_length:
+                            input_labels[c,:,:]=np.expand_dims(label,axis=-1)
+                        else:
+                            input_labels[c,:len(label),:]=np.expand_dims(label,axis=-1)
+                    yield [input_tokens,input_segments],input_labels
+                    start=(start+self.batch_size)%len(index)
+
 
 class SemEval(object):
     def __init__(self,train_dir=train_dir,label_dir=label_dir,
@@ -444,7 +463,7 @@ class SemEval(object):
                                    mixed=self.mixed,embedding=self.embedding)
 
     def train(self,model_name,monitor='val_acc',layer_number=2,lr=0.001,
-              op_setting='adam'):
+              op_setting='adam',trainable=True):
         """
 
         :param model_name:
@@ -466,9 +485,10 @@ class SemEval(object):
         word_str='Word-level' if self.word_level else 'Char-level'
         sentence='Var-length' if self.fixed_length is None else 'Fixed-length-{}'.format(self.fixed_length)
         v_s=len(self.dataloader.token.word_index)+1 if self.embedding is None else len(self.dataloader.token.keys())
-        model_save_file='_'.join([model_name,word_str,op_setting,sentence,emb_str,monitor,str(layer_number)])+'.h5'
+        train_str='trainable' if trainable else 'freezed'
+        model_save_file='_'.join([model_name,word_str,op_setting,sentence,train_str,emb_str,monitor,str(layer_number)])+'.h5'
         model,loss,metrics,embed_layer=CustomModels(model_name=model_name,vocab_size=v_s,
-                           embedding_name=self.embedding,layer_number=layer_number,paths=self.dataloader.paths).build_model()
+                           embedding_name=self.embedding,layer_number=layer_number,paths=self.dataloader.paths).build_model(trainable=trainable)
         if self.embedding is None:
             from tensorflow.keras.optimizers import Adam,RMSprop,SGD
             from models.CRF import f1,LazyOptimizer
@@ -493,14 +513,12 @@ class SemEval(object):
         else:
             from keras.optimizers import Adam,RMSprop,SGD
             import keras
-            from models.f1_keras import f1,LazyOptimizer
+            from models.f1_keras import f1
             op_dict={
                 'adam':Adam(lr),
                 'radam':RAdam(lr),
                 'rms':RMSprop(lr),
-                'sgd':SGD(lr),
-                'lazyadam':LazyOptimizer(Adam(lr),[embed_layer]),
-                'lazyrms':LazyOptimizer(RMSprop(lr),[embed_layer])
+                'sgd':SGD(lr)
             }
             callbacks=[
                 keras.callbacks.ModelCheckpoint(os.path.join('saved_models',model_save_file),
@@ -531,6 +549,7 @@ class SemEval(object):
 
         model_name=model_path.split('/')[-1].strip('.h5')
         direct_load=True if model_name.split('_')[0].endswith('crf')==False else False
+        direct_load=False
         if direct_load==False:
             v_s=len(self.dataloader.token.word_index)+1 if self.embedding is None else len(self.dataloader.token.keys())
             e_n=model_name.split('_')[-4] if model_name.split('_')[-4]!='No-embedding' else None
@@ -580,7 +599,7 @@ class SemEval(object):
             if model_name.split('_')[0].endswith('crf'):print(pred)
             pro_index=np.where(pred>=0.5)
             result[path]+=np.array(pro_index[0]+i).tolist()
-        json.dump(result,open('results/{}_{}_{}.json'.format(data,model_name,gap),'w',encoding='utf-8'))
+        #json.dump(result,open('results/{}_{}_{}.json'.format(data,model_name,gap),'w',encoding='utf-8'))
         sub=open('results/{}_{}_{}.txt'.format(data,model_name,gap),'w',encoding='utf-8')
         for path in tqdm.tqdm(result,total=len(result)):
             all_index=result[path]
@@ -606,25 +625,30 @@ class SemEval(object):
             'dev':self.dataloader.dev,
             'test':self.dataloader.test
         }
+        bert_tokenizer=None
+        if self.embedding:
+            bert_tokenizer=Bert_Tokenizer(self.dataloader.token)
         if self.fixed_length is None:
             for line in tqdm.tqdm(dataset[data],total=len(dataset[data])):
                 f=np.load(line)
                 if self.embedding is None:
                     words=self.dataloader.token.texts_to_sequences(f[:,0])
                     words=np.squeeze(words,axis=-1)
+                    words=np.expand_dims(words,axis=0)
+                    pred=np.squeeze(model.predict(words)[0],axis=-1)
+                    if model_name.split('_')[0].endswith('crf'):print(pred)
+                    pro_index=np.where(pred>=0.5)
+                    result[line]+=pro_index[0].to_list()
                 else:
-                    words=[]
-                    for word in f[:,0]:
-                        try:
-                            words.append(self.dataloader.token[word])
-                        except:
-                            words.append(self.dataloader.token['[UNK]'])
-                    words=np.array(words)
-                words=np.expand_dims(words,axis=0)
-                pred=np.squeeze(model.predict(words)[0],axis=-1)
-                if model_name.split('_')[0].endswith('crf'):print(pred)
-                pro_index=np.where(pred>=0.5)
-                result[line]+=pro_index[0].to_list()
+                    words=' '.join(f[:,0])
+                    ids,segments=bert_tokenizer.encode(words)
+                    ids=np.expand_dims(ids,axis=0)
+                    segments=np.expand_dims(segments,axis=0)
+                    pred=np.squeeze(model.predict([ids,segments])[0],axis=-1)
+                    if model_name.split('_')[0].endswith('crf'):print(pred)
+                    pro_index=np.where(pred>=0.5)
+                    result[line]+=pro_index[0].to_list()
+
         else:
             for line in tqdm.tqdm(dataset[data],total=len(dataset[data])):
                 s,e,path=line
@@ -632,19 +656,20 @@ class SemEval(object):
                 if self.embedding is None:
                     words=self.dataloader.token.texts_to_sequences(f[s:e,0])
                     words=np.squeeze(words,axis=-1)
+                    words=np.expand_dims(words,axis=0)
+                    pred=np.squeeze(model.predict(words)[0],axis=-1)
+                    if model_name.split('_')[0].endswith('crf'):print(pred)
+                    pro_index=np.where(pred>=0.5)
+                    result[path]+=np.array(pro_index[0]+s).tolist()
                 else:
-                    words=[]
-                    for word in f[s:e,0]:
-                        try:
-                            words.append(self.dataloader.token[word])
-                        except:
-                            words.append(self.dataloader.token['[UNK]'])
-                    words=np.array(words)
-                words=np.expand_dims(words,axis=0)
-                pred=np.squeeze(model.predict(words)[0],axis=-1)
-                if model_name.split('_')[0].endswith('crf'):print(pred)
-                pro_index=np.where(pred>=0.5)
-                result[path]+=np.array(pro_index[0]+s).tolist()
+                    words=' '.join(f[s:e,0])
+                    ids,segments=bert_tokenizer.encode(words,max_len=self.fixed_length)
+                    ids=np.expand_dims(ids,axis=0)
+                    segments=np.expand_dims(segments,axis=0)
+                    pred=np.squeeze(model.predict([ids,segments])[0],axis=-1)
+                    if model_name.split('_')[0].endswith('crf'):print(pred)
+                    pro_index=np.where(pred>=0.5)
+                    result[line]+=pro_index[0].to_list()
         json.dump(result,open('results/{}_{}_{}.json'.format(data,model_name,gap),'w',encoding='utf-8'))
         sub=open('results/{}_{}_{}.txt'.format(data,model_name,gap),'w',encoding='utf-8')
         for path in tqdm.tqdm(result,total=len(result)):
@@ -668,6 +693,9 @@ class SemEval(object):
         sub.close()
 if __name__=='__main__':
     app=SemEval(
-        split_rate=0.2,batch_size=16,word_level=True,embedding='bert',fixed_length=512
+        split_rate=0.2,batch_size=2,word_level=True,embedding='bert',fixed_length=512
     )
-    app.train(model_name='lstm',monitor='f1',layer_number=2,op_setting='adam')
+    app.predict('saved_models/lstm_Word-level_adam_Fixed-length-512_freezed_bert_val_acc_2.h5')
+    app.predict('saved_models/lstm_Word-level_adam_Fixed-length-512_freezed_bert_val_f1_2.h5')
+    app.predict('saved_models/lstm_Word-level_adam_Fixed-length-512_trainable_bert_val_f1_2.h5')
+    app.predict('saved_models/lstm_Word-level_adam_Fixed-length-512_trainable_bert_val_acc_2.h5')
